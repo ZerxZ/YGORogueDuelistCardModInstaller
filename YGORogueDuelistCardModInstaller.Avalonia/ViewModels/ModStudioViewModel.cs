@@ -354,6 +354,97 @@ public sealed class ModStudioViewModel : ViewModelBase
         if (match is not null) SelectedMod = match;
     }
 
+    public void LoadFromVanillaCard(VanillaCardItem card, int targetId, string? luaScript, string? copiedArtPath, bool keepVanillaIdentity)
+    {
+        var preset = CardPresets.FirstOrDefault(p => p.TypeMask == card.TypeMask)
+                     ?? CardPresets.FirstOrDefault(p => string.Equals(p.DisplayType, card.DisplayType, StringComparison.OrdinalIgnoreCase))
+                     ?? CardPresets[0];
+        SelectedCardPreset = preset;
+        CardId = targetId.ToString(CultureInfo.InvariantCulture);
+        CardName = keepVanillaIdentity ? card.Name : $"{card.Name} (Custom)";
+        CardZhName = string.IsNullOrWhiteSpace(card.ZhName)
+            ? string.Empty
+            : (keepVanillaIdentity ? card.ZhName : $"{card.ZhName}（改）");
+        CardDesc = card.Desc;
+        CardZhDesc = card.ZhDesc;
+        CardRace = string.IsNullOrWhiteSpace(card.Race) ? preset.DefaultRace : card.Race;
+        CardAttribute = card.Attribute;
+        CardLevel = card.Level.ToString(CultureInfo.InvariantCulture);
+        CardAtk = card.Atk.ToString(CultureInfo.InvariantCulture);
+        CardDef = card.Def.ToString(CultureInfo.InvariantCulture);
+        CardArtPath = copiedArtPath ?? string.Empty;
+        CardLuaScript = !string.IsNullOrWhiteSpace(luaScript)
+            ? luaScript
+            : ModStudioService.BuildLuaCardTemplate("blank", targetId, CardName);
+        SelectedSubTabIndex = 0;
+        StudioStatusMessage = Loc.T($"已载入原版卡牌参考：{card.Name} (#{card.Id})", $"Loaded vanilla card reference: {card.Name} (#{card.Id})");
+    }
+
+    public void LoadFromVanillaCharacter(VanillaCharacterItem ch, bool keepVanillaIdentity)
+    {
+        CharName = keepVanillaIdentity ? ch.Name : $"{ch.Name} Remix";
+        CharZhName = string.IsNullOrWhiteSpace(ch.ZhName)
+            ? string.Empty
+            : (keepVanillaIdentity ? ch.ZhName : $"{ch.ZhName}（改）");
+        CharSprite = string.IsNullOrWhiteSpace(ch.Sprite) ? "dm01.png" : ch.Sprite;
+        CharRace = string.IsNullOrWhiteSpace(ch.Race) ? "Spellcaster" : ch.Race;
+        CharAttribute = string.IsNullOrWhiteSpace(ch.Attribute) ? "DARK" : ch.Attribute;
+        CharColor = string.IsNullOrWhiteSpace(ch.Color) ? "#38bdf8" : ch.Color;
+        CharStartingRelic = string.IsNullOrWhiteSpace(ch.StartingRelic) ? "mage" : ch.StartingRelic;
+        CharStartingPacks = string.Join(", ", ch.StartingPacks);
+        CharDeckCards = string.Join(", ", ch.Cards);
+        CharUnlocked = true;
+        SelectedSubTabIndex = 1;
+        StudioStatusMessage = Loc.T($"已载入原版角色参考：{ch.Name}", $"Loaded vanilla character reference: {ch.Name}");
+    }
+
+    public void LoadFromVanillaRelic(VanillaRelicItem r, string newKey, string? copiedArtPath, bool keepVanillaIdentity)
+    {
+        RelicKey = newKey;
+        RelicName = keepVanillaIdentity ? r.Name : $"{r.Name} (Custom)";
+        RelicZhName = string.IsNullOrWhiteSpace(r.ZhName)
+            ? string.Empty
+            : (keepVanillaIdentity ? r.ZhName : $"{r.ZhName}（改）");
+        RelicCost = r.Cost.ToString(CultureInfo.InvariantCulture);
+        RelicTag = string.IsNullOrWhiteSpace(r.Tag) ? "utility" : r.Tag;
+        RelicDesc = r.Description;
+        RelicZhDesc = r.ZhDescription;
+        RelicArt = copiedArtPath ?? r.Art;
+        RelicLuaEffect = ModStudioService.BuildLuaRelicTemplate("gain_lp");
+        SelectedSubTabIndex = 2;
+        StudioStatusMessage = Loc.T($"已载入原版遗物参考：{r.Name} ({r.Key})", $"Loaded vanilla relic reference: {r.Name} ({r.Key})");
+    }
+
+    public void LoadFromVanillaPack(VanillaPackItem p, bool keepVanillaIdentity)
+    {
+        PackId = keepVanillaIdentity ? p.Id : $"{p.Id}-MOD";
+        PackName = keepVanillaIdentity ? p.Name : $"{p.Name} (Custom)";
+        PackZhName = string.IsNullOrWhiteSpace(p.ZhName)
+            ? string.Empty
+            : (keepVanillaIdentity ? p.ZhName : $"{p.ZhName}（改）");
+        PackCode = string.IsNullOrWhiteSpace(p.Code) ? "MOD" : p.Code;
+        PackSize = p.Size.ToString(CultureInfo.InvariantCulture);
+        PackCommonIds = string.Join(", ", p.CommonIds);
+        PackRareIds = string.Join(", ", p.RareIds);
+        PackSuperIds = string.Join(", ", p.SuperIds);
+        PackUltraIds = string.Join(", ", p.UltraIds);
+        SelectedSubTabIndex = 3;
+        StudioStatusMessage = Loc.T($"已载入原版卡包参考：{p.Name} ({p.Id})", $"Loaded vanilla pack reference: {p.Name} ({p.Id})");
+    }
+
+    public void LoadFromVanillaPreconstructedDeck(VanillaPreconstructedDeckItem d, bool keepVanillaIdentity)
+    {
+        DeckId = keepVanillaIdentity ? d.Id : $"{d.Id}-MOD";
+        DeckName = keepVanillaIdentity ? d.Name : $"{d.Name} (Custom)";
+        DeckZhName = string.IsNullOrWhiteSpace(d.ZhName)
+            ? string.Empty
+            : (keepVanillaIdentity ? d.ZhName : $"{d.ZhName}（改）");
+        DeckArt = string.IsNullOrWhiteSpace(d.Art) ? "SDK" : d.Art;
+        DeckCardIds = string.Join(", ", d.CardIds);
+        SelectedSubTabIndex = 3;
+        StudioStatusMessage = Loc.T($"已载入原版预组卡组参考：{d.Name} ({d.Id})", $"Loaded vanilla deck reference: {d.Name} ({d.Id})");
+    }
+
     private void RefreshModFiles()
     {
         ModFiles.Clear();

@@ -66,7 +66,18 @@ public sealed class LocalizationService : INotifyPropertyChanged
     // Tabs
     public string TabMods => T("MOD 列表与加载顺序", "MOD Library & Load Order");
     public string TabStudio => T("可视化 MOD 创作工作台", "Visual MOD Studio");
+    public string TabVanilla => T("原版图鉴参考（带图复制）", "Vanilla Catalog & Clone");
     public string TabSettings => T("游戏路径与更新设置", "Paths, Updates & Export");
+
+    // Vanilla Reference Browser
+    public string VanillaSearchWatermark => T("按中文名 / 英文名 / ID / 卡包代码搜索原版内容...", "Search vanilla cards, characters, relics, packs, decks...");
+    public string VanillaReloadButton => T("刷新图鉴", "Reload Catalog");
+    public string VanillaLoadMoreButton => T("加载更多...", "Load More...");
+    public string VanillaKeepIdCheckbox => T("保留原版 ID/Key（用于覆盖修改原版）", "Keep vanilla ID/Key (override vanilla)");
+    public string VanillaCloneToStudioButton => T("📋 复制到创作工作台编辑", "📋 Clone to Studio");
+    public string VanillaQuickCloneButton => T("⚡ 一键克隆到当前 MOD", "⚡ Quick Clone to MOD");
+    public string VanillaLuaHeader => T("原版 ocgcore Lua 脚本参考（只读）", "Vanilla ocgcore Lua Script Reference");
+    public string VanillaEmptyHint => T("点击「刷新图鉴」加载本地原版游戏图片与数据（100% 离线读取，不修改原版）", "Click 'Reload Catalog' to browse local vanilla game artwork & data offline.");
 
     // Toolbar
     public string ImportZipButton => T("+ 导入 ZIP / 整合包", "+ Import ZIP / Pack");

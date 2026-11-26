@@ -34,9 +34,11 @@ public sealed class AsyncRelayCommand(Func<Task> executeAsync, Func<bool>? canEx
 
     public bool CanExecute(object? parameter) => !_isExecuting && (canExecute?.Invoke() ?? true);
 
-    public async void Execute(object? parameter)
+    public async void Execute(object? parameter) => await ExecuteAsyncInternal();
+
+    public async Task ExecuteAsyncInternal()
     {
-        if (!CanExecute(parameter))
+        if (!CanExecute(null))
         {
             return;
         }

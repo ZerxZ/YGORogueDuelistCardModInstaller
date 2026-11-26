@@ -600,7 +600,207 @@
                 </Grid>
             </TabItem>
 
-            <!-- TAB 3: Game Paths, Updates & Export -->
+            <!-- TAB 3: Offline Vanilla Reference Gallery (With Real Artwork & 1-Click Clone) -->
+            <TabItem Header="{Binding Loc.TabVanilla}" FontSize="13.5">
+                <Grid RowDefinitions="Auto,*" RowSpacing="10" Margin="0,10,0,0">
+                    <!-- Category Pills + Search + Reload -->
+                    <Border Grid.Row="0" Classes="card" Padding="10,8">
+                        <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6">
+                                <Button Classes="subtle" Content="{Binding Vanilla.CardsCategoryLabel}" Command="{Binding Vanilla.SelectCardsCommand}" />
+                                <Button Classes="subtle" Content="{Binding Vanilla.CharactersCategoryLabel}" Command="{Binding Vanilla.SelectCharactersCommand}" />
+                                <Button Classes="subtle" Content="{Binding Vanilla.RelicsCategoryLabel}" Command="{Binding Vanilla.SelectRelicsCommand}" />
+                                <Button Classes="subtle" Content="{Binding Vanilla.PacksCategoryLabel}" Command="{Binding Vanilla.SelectPacksCommand}" />
+                                <Button Classes="subtle" Content="{Binding Vanilla.DecksCategoryLabel}" Command="{Binding Vanilla.SelectDecksCommand}" />
+                            </StackPanel>
+                            <TextBox Grid.Column="1"
+                                     Text="{Binding Vanilla.SearchQuery}"
+                                     Watermark="{Binding Loc.VanillaSearchWatermark}" />
+                            <TextBlock Grid.Column="2"
+                                       Text="{Binding Vanilla.ResultCountText}"
+                                       VerticalAlignment="Center"
+                                       FontSize="11.5"
+                                       Foreground="#94A3B8" />
+                            <Button Grid.Column="3" Classes="primary" Content="{Binding Loc.VanillaReloadButton}" Command="{Binding Vanilla.LoadCatalogCommand}" />
+                        </Grid>
+                    </Border>
+
+                    <!-- Left Image Grid Gallery + Right Visual Inspector & Clone -->
+                    <Grid Grid.Row="1" ColumnDefinitions="*,420" ColumnSpacing="12">
+                        <!-- Left: Visual Thumbnail Card Grid -->
+                        <Border Grid.Column="0" Classes="card" Padding="8">
+                            <Grid RowDefinitions="*,Auto">
+                                <TextBlock Grid.Row="0"
+                                           Text="{Binding Loc.VanillaEmptyHint}"
+                                           IsVisible="{Binding Vanilla.IsCatalogNotLoaded}"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           Foreground="#94A3B8" />
+
+                                <ListBox Grid.Row="0"
+                                         IsVisible="{Binding Vanilla.IsCatalogLoaded}"
+                                         ItemsSource="{Binding Vanilla.Items}"
+                                         SelectedItem="{Binding Vanilla.SelectedItem}"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                    <ListBox.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel Orientation="Horizontal" />
+                                        </ItemsPanelTemplate>
+                                    </ListBox.ItemsPanel>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:VanillaTileItem">
+                                            <Border Width="148"
+                                                    Background="#141923"
+                                                    BorderBrush="#273044"
+                                                    BorderThickness="1"
+                                                    CornerRadius="8"
+                                                    Padding="6"
+                                                    Margin="3">
+                                                <StackPanel Spacing="5">
+                                                    <Border Height="156"
+                                                            Background="#0B0F17"
+                                                            CornerRadius="5"
+                                                            ClipToBounds="True">
+                                                        <Image Source="{Binding Thumbnail}"
+                                                               Stretch="Uniform"
+                                                               HorizontalAlignment="Center"
+                                                               VerticalAlignment="Center" />
+                                                    </Border>
+                                                    <TextBlock Text="{Binding Title}"
+                                                               FontSize="12"
+                                                               FontWeight="SemiBold"
+                                                               Foreground="#F1F5F9"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock Text="{Binding Subtitle}"
+                                                               FontSize="10.5"
+                                                               Foreground="#94A3B8"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                    <Border Background="#1E293B" CornerRadius="4" Padding="5,1" HorizontalAlignment="Left">
+                                                        <TextBlock Text="{Binding Badge}" FontSize="10" Foreground="#93C5FD" TextTrimming="CharacterEllipsis" />
+                                                    </Border>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+
+                                <Button Grid.Row="1"
+                                        Classes="subtle"
+                                        Margin="0,6,0,0"
+                                        HorizontalAlignment="Center"
+                                        IsVisible="{Binding Vanilla.HasMoreItems}"
+                                        Content="{Binding Loc.VanillaLoadMoreButton}"
+                                        Command="{Binding Vanilla.LoadMoreCommand}" />
+                            </Grid>
+                        </Border>
+
+                        <!-- Right: Hi-Res Visual Preview + Sub-Cards Strip + Lua + 1-Click Clone -->
+                        <Border Grid.Column="1" Classes="card" Padding="12">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <StackPanel Spacing="10" IsVisible="{Binding Vanilla.HasSelectedItem}">
+                                    <!-- Large Artwork Preview -->
+                                    <Border Height="235"
+                                            Background="#0B0F17"
+                                            BorderBrush="#273044"
+                                            BorderThickness="1"
+                                            CornerRadius="8"
+                                            Padding="6">
+                                        <Image Source="{Binding Vanilla.SelectedDetailImage}"
+                                               Stretch="Uniform"
+                                               HorizontalAlignment="Center"
+                                               VerticalAlignment="Center" />
+                                    </Border>
+
+                                    <TextBlock Text="{Binding Vanilla.DetailTitle}"
+                                               FontSize="15"
+                                               FontWeight="Bold"
+                                               Foreground="#F8FAFC"
+                                               TextWrapping="Wrap" />
+
+                                    <TextBlock Text="{Binding Vanilla.DetailSubtitle}"
+                                               FontSize="12"
+                                               Foreground="#93C5FD"
+                                               TextWrapping="Wrap" />
+
+                                    <Border Background="#131823" CornerRadius="6" Padding="8,6">
+                                        <TextBlock Text="{Binding Vanilla.DetailMeta}"
+                                                   FontFamily="Cascadia Mono, Consolas, monospace"
+                                                   FontSize="11"
+                                                   Foreground="#4ADE80"
+                                                   TextWrapping="Wrap" />
+                                    </Border>
+
+                                    <!-- 1-Click Clone Controls -->
+                                    <StackPanel Spacing="6">
+                                        <CheckBox IsChecked="{Binding Vanilla.KeepVanillaIdentity}"
+                                                  Content="{Binding Loc.VanillaKeepIdCheckbox}"
+                                                  FontSize="11.5"
+                                                  Foreground="#CBD5E1" />
+                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                            <Button Grid.Column="0"
+                                                    Classes="primary"
+                                                    HorizontalAlignment="Stretch"
+                                                    HorizontalContentAlignment="Center"
+                                                    Content="{Binding Loc.VanillaCloneToStudioButton}"
+                                                    Command="{Binding Vanilla.CloneToStudioCommand}" />
+                                            <Button Grid.Column="1"
+                                                    Classes="success"
+                                                    HorizontalAlignment="Stretch"
+                                                    HorizontalContentAlignment="Center"
+                                                    Content="{Binding Loc.VanillaQuickCloneButton}"
+                                                    Command="{Binding Vanilla.QuickCloneToModCommand}" />
+                                        </Grid>
+                                    </StackPanel>
+
+                                    <TextBlock Text="{Binding Vanilla.DetailDescription}"
+                                               FontSize="12"
+                                               Foreground="#E2E8F0"
+                                               TextWrapping="Wrap"
+                                               LineHeight="18" />
+
+                                    <!-- Visual Sub-Cards Preview (for Characters / Booster Packs / Preconstructed Decks) -->
+                                    <StackPanel Spacing="6" IsVisible="{Binding Vanilla.HasDetailSubCards}">
+                                        <TextBlock Text="{Binding Vanilla.DetailSubCardsHeader}"
+                                                   FontSize="12"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="#FDE047" />
+                                        <ItemsControl ItemsSource="{Binding Vanilla.DetailSubCards}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <WrapPanel Orientation="Horizontal" />
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:VanillaMiniCardItem">
+                                                    <Border Width="78" Background="#141923" CornerRadius="5" Padding="3" Margin="2" ToolTip.Tip="{Binding DisplayName}">
+                                                        <StackPanel Spacing="2">
+                                                            <Image Source="{Binding Thumbnail}" Height="96" Stretch="Uniform" />
+                                                            <TextBlock Text="{Binding DisplayName}" FontSize="9.5" Foreground="#CBD5E1" TextTrimming="CharacterEllipsis" HorizontalAlignment="Center" />
+                                                        </StackPanel>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+
+                                    <!-- Read-only Vanilla Lua Card Script Reference -->
+                                    <StackPanel Spacing="4" IsVisible="{Binding Vanilla.HasDetailLua}">
+                                        <TextBlock Text="{Binding Loc.VanillaLuaHeader}" FontSize="11.5" FontWeight="SemiBold" Foreground="#94A3B8" />
+                                        <TextBox Text="{Binding Vanilla.DetailLuaScript}"
+                                                 IsReadOnly="True"
+                                                 AcceptsReturn="True"
+                                                 FontFamily="Cascadia Mono, Consolas, monospace"
+                                                 FontSize="11"
+                                                 Height="160" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Border>
+                    </Grid>
+                </Grid>
+            </TabItem>
+
+            <!-- TAB 4: Game Paths, Updates & Export -->
             <TabItem Header="{Binding Loc.TabSettings}" FontSize="13.5">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,10,0,0">
                     <StackPanel Spacing="12">

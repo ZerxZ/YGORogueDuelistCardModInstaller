@@ -67,6 +67,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             () => _engine,
             AppendLogUiSafe,
             OnStudioFileSavedAsync);
+        Vanilla = new VanillaBrowserViewModel(
+            Loc,
+            () => _engine,
+            Studio,
+            tabIdx => SelectedMainTabIndex = tabIdx,
+            AppendLogUiSafe,
+            OnStudioFileSavedAsync);
 
         var initialState = _engine.Repository.LoadState();
         Loc.SetLanguage(initialState.Language);
@@ -173,6 +180,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
 
     public LocalizationService Loc { get; }
     public ModStudioViewModel Studio { get; }
+    public VanillaBrowserViewModel Vanilla { get; }
 
     public IReadOnlyList<InjectionModeOption> InjectionModeOptions
     {
@@ -201,7 +209,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     public int SelectedMainTabIndex
     {
         get => _selectedMainTabIndex;
-        set => SetProperty(ref _selectedMainTabIndex, value);
+        set
+        {
+            if (SetProperty(ref _selectedMainTabIndex, value) && value == 2)
+            {
+                _ = Vanilla.EnsureLoadedAsync();
+            }
+        }
     }
 
     public InjectionModeOption SelectedInjectionMode
@@ -544,6 +558,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         {
             RebuildInjectionModeOptions(SelectedInjectionMode.Mode);
             OnPropertyChanged(nameof(HotReloadToggleLabel));
+            Vanilla.RefreshLocalization();
             foreach (var mod in Mods) mod.RefreshLocalization();
             if (_lastStatus is not null) ApplyStatusSnapshot(_lastStatus);
             if (!IsBusy) StatusText = Loc.T("就绪", "Ready");
@@ -643,6 +658,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
                           ?? Mods.FirstOrDefault();
 
             Studio.SyncMods(status.Mods, Studio.SelectedMod?.Id ?? SelectedMod?.Id);
+            Vanilla.NotifyActiveModChanged();
             ApplyStatusSnapshot(status);
         }
         finally
@@ -1156,6 +1172,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     public void Dispose()
     {
         StopHotReloadIfRunning();
+        Vanilla.Dispose();
         _cts?.Dispose();
     }
 }
