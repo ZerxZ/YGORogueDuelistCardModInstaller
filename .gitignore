@@ -1,0 +1,72 @@
+## .NET / C# Build Outputs
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+publish/
+out/
+dist/
+artifacts/
+TestResults/
+*.nupkg
+*.snupkg
+/packages/
+project.lock.json
+project.fragment.lock.json
+*.pdb
+*.cache
+*.log
+*.tmp
+*.bak
+*.orig
+
+## IDE & Editors (JetBrains Rider / Visual Studio / VS Code)
+.idea/
+.vs/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.csproj.user
+*.DotSettings.user
+riderModule.iml
+*.iml
+/_ReSharper.Caches/
+_ReSharper*/
+*.[Rr]e[Ss]harper
+
+## Legacy Local MOD Assets, Scripts & Docs (Excluded from Repo)
+/art/
+/data/
+install-mod.ps1
+uninstall-mod.ps1
+安装MOD.cmd
+卸载MOD.cmd
+说明.txt
+
+## Local Game Copies, Installers & Backups
+.external/
+Yu-Gi-Oh! Rogue Duelist/
+web-*.zip
+YGO-Rogue-Windows-Setup*.exe
+backup/
+
+## MOD Manager Local Runtime State & User Mods
+manager-state.json
+mods/
+
+## OS Generated Files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+~$*

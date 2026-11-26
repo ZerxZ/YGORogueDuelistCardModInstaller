@@ -1,0 +1,4 @@
+/* Sample Xmake DSL MOD stylesheet */
+:root {
+  --ygo-dsl-accent: #38bdf8;
+}

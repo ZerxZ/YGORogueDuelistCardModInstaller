@@ -1,0 +1,49 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="YGORogueDuelistCardModInstaller.Avalonia.Views.NewWorkspaceDialog"
+        Width="520"
+        SizeToContent="Height"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Title="新建 / 添加 MOD 工作区">
+    <Border Padding="20" Background="#1C212D">
+        <StackPanel Spacing="12">
+            <TextBlock x:Name="SubtitleTextBlock"
+                       Text="创建一个独立 MOD 工作区（含专属 mods\ 与配置），方便按专题或整合包切换管理"
+                       FontSize="12.5"
+                       TextWrapping="Wrap"
+                       Foreground="#94A3B8" />
+
+            <StackPanel Spacing="4">
+                <TextBlock x:Name="NameLabel" Text="工作区名称 *" FontSize="12" Foreground="#CBD5E1" />
+                <TextBox x:Name="NameTextBox" Watermark="如：青眼白龙专题 / 开发测试工作区" />
+            </StackPanel>
+
+            <StackPanel Spacing="4">
+                <TextBlock x:Name="PathLabel" Text="工作区文件夹路径 *" FontSize="12" Foreground="#CBD5E1" />
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <TextBox Grid.Column="0" x:Name="PathTextBox" Watermark="C:\YGO-Workspaces\my-workspace" />
+                    <Button Grid.Column="1" x:Name="BrowseButton" Classes="subtle" Content="浏览..." Click="OnBrowseClick" />
+                </Grid>
+            </StackPanel>
+
+            <StackPanel Spacing="4">
+                <TextBlock x:Name="DescLabel" Text="备注（可选）" FontSize="12" Foreground="#CBD5E1" />
+                <TextBox x:Name="DescTextBox" Watermark="记录此工作区用途..." />
+            </StackPanel>
+
+            <TextBlock x:Name="ErrorTextBlock"
+                       Foreground="#F87171"
+                       FontSize="12"
+                       IsVisible="False" />
+
+            <StackPanel Orientation="Horizontal"
+                        HorizontalAlignment="Right"
+                        Spacing="10"
+                        Margin="0,6,0,0">
+                <Button x:Name="CancelButton" Classes="subtle" MinWidth="84" HorizontalContentAlignment="Center" Content="取消" Click="OnCancelClick" />
+                <Button x:Name="ConfirmButton" Classes="primary" MinWidth="104" HorizontalContentAlignment="Center" Content="保存并切换" Click="OnConfirmClick" />
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</Window>

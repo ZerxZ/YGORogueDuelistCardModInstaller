@@ -1,0 +1,60 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="YGORogueDuelistCardModInstaller.Avalonia.Views.CreateModDialog"
+        Width="490"
+        SizeToContent="Height"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Title="新建 MOD 模板">
+    <Border Padding="20" Background="#1C212D">
+        <StackPanel Spacing="12">
+            <TextBlock x:Name="SubtitleTextBlock"
+                       Text="在 mods\ 下创建一个新的标准 MOD 模板目录"
+                       FontSize="13"
+                       Foreground="#94A3B8" />
+
+            <StackPanel Spacing="4">
+                <TextBlock x:Name="IdLabel" Text="MOD ID（唯一标识，如 my-blue-eyes-pack）*" FontSize="12" Foreground="#CBD5E1" />
+                <TextBox x:Name="IdTextBox" Watermark="my-custom-mod" />
+            </StackPanel>
+
+            <StackPanel Spacing="4">
+                <TextBlock x:Name="NameLabel" Text="显示名称" FontSize="12" Foreground="#CBD5E1" />
+                <TextBox x:Name="NameTextBox" Watermark="我的自定义卡组 MOD" />
+            </StackPanel>
+
+            <Grid ColumnDefinitions="*,150" ColumnSpacing="10">
+                <StackPanel Grid.Column="0" Spacing="4">
+                    <TextBlock x:Name="AuthorLabel" Text="作者" FontSize="12" Foreground="#CBD5E1" />
+                    <TextBox x:Name="AuthorTextBox" Watermark="你的昵称" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" Spacing="4">
+                    <TextBlock x:Name="MinVerLabel" Text="最低游戏版本（可选）" FontSize="12" Foreground="#CBD5E1" />
+                    <TextBox x:Name="MinGameVerTextBox" Watermark="0.2.46" />
+                </StackPanel>
+            </Grid>
+
+            <StackPanel Spacing="4">
+                <TextBlock x:Name="DescLabel" Text="简介" FontSize="12" Foreground="#CBD5E1" />
+                <TextBox x:Name="DescTextBox"
+                         AcceptsReturn="True"
+                         TextWrapping="Wrap"
+                         Height="68"
+                         Watermark="简要描述此 MOD 的内容..." />
+            </StackPanel>
+
+            <TextBlock x:Name="ErrorTextBlock"
+                       Foreground="#F87171"
+                       FontSize="12"
+                       IsVisible="False" />
+
+            <StackPanel Orientation="Horizontal"
+                        HorizontalAlignment="Right"
+                        Spacing="10"
+                        Margin="0,6,0,0">
+                <Button x:Name="CancelButton" Classes="subtle" MinWidth="84" HorizontalContentAlignment="Center" Content="取消" Click="OnCancelClick" />
+                <Button x:Name="CreateButton" Classes="primary" MinWidth="96" HorizontalContentAlignment="Center" Content="创建模板" Click="OnCreateClick" />
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</Window>

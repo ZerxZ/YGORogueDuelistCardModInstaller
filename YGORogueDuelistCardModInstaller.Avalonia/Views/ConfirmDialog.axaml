@@ -1,0 +1,32 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="YGORogueDuelistCardModInstaller.Avalonia.Views.ConfirmDialog"
+        Width="460"
+        SizeToContent="Height"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Title="确认">
+    <Border Padding="20" Background="#1C212D">
+        <StackPanel Spacing="18">
+            <TextBlock x:Name="MessageTextBlock"
+                       TextWrapping="Wrap"
+                       FontSize="14"
+                       LineHeight="22"
+                       Foreground="#E6EAF2" />
+            <StackPanel Orientation="Horizontal"
+                        HorizontalAlignment="Right"
+                        Spacing="10">
+                <Button x:Name="CancelButton"
+                        Classes="subtle"
+                        MinWidth="84"
+                        HorizontalContentAlignment="Center"
+                        Click="OnCancelClick" />
+                <Button x:Name="ConfirmButton"
+                        Classes="primary"
+                        MinWidth="96"
+                        HorizontalContentAlignment="Center"
+                        Click="OnConfirmClick" />
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</Window>

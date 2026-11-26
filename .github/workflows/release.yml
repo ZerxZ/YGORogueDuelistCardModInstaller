@@ -1,0 +1,206 @@
+name: Build & Release (Native AOT win-x64)
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+    paths:
+      - "YGORogueDuelistCardModInstaller/**"
+      - "YGORogueDuelistCardModInstaller.Core/**"
+      - "YGORogueDuelistCardModInstaller.Avalonia/**"
+      - "YGORogueDuelistCardModInstaller.Mcp/**"
+      - "YGORogueDuelistCardModInstaller.slnx"
+      - "Directory.Build.props"
+      - "examples/**"
+      - "docs/**"
+      - "README.md"
+      - "README.zh-CN.md"
+      - "LICENSE"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Optional release tag (e.g. v1.0.0). Leave empty to auto-generate."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  detect-changes:
+    name: Detect Code Changes Since Last Release
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      release_tag: ${{ steps.check.outputs.release_tag }}
+      release_version: ${{ steps.check.outputs.release_version }}
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if release should run
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Case 1: Explicit version tag push (v*)
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
+            echo "release_version=${TAG#v}" >> "$GITHUB_OUTPUT"
+            echo "Triggered by version tag ${TAG}."
+            exit 0
+          fi
+
+          # Case 2: Manual workflow_dispatch
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            INPUT_TAG="${{ inputs.tag }}"
+            if [[ -n "${INPUT_TAG}" ]]; then
+              TAG="${INPUT_TAG}"
+            else
+              TAG="v1.0.${GITHUB_RUN_NUMBER}"
+            fi
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
+            echo "release_version=${TAG#v}" >> "$GITHUB_OUTPUT"
+            echo "Triggered manually with tag ${TAG}."
+            exit 0
+          fi
+
+          # Case 3: Push to main — only release if project code actually changed since latest v* tag
+          LAST_TAG=$(git describe --tags --abbrev=0 --match "v*" 2>/dev/null || true)
+          if [[ -z "${LAST_TAG}" ]]; then
+            CHANGED="yes"
+          else
+            DIFF_FILES=$(git diff --name-only "${LAST_TAG}" HEAD -- \
+              YGORogueDuelistCardModInstaller \
+              YGORogueDuelistCardModInstaller.Core \
+              YGORogueDuelistCardModInstaller.Avalonia \
+              YGORogueDuelistCardModInstaller.Mcp \
+              YGORogueDuelistCardModInstaller.slnx \
+              Directory.Build.props \
+              examples \
+              docs \
+              README.md \
+              README.zh-CN.md \
+              LICENSE || true)
+            if [[ -n "${DIFF_FILES}" ]]; then
+              CHANGED="yes"
+              echo "Changed files since ${LAST_TAG}:"
+              echo "${DIFF_FILES}"
+            else
+              CHANGED="no"
+            fi
+          fi
+
+          if [[ "${CHANGED}" == "yes" ]]; then
+            TAG="v1.0.${GITHUB_RUN_NUMBER}"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
+            echo "release_version=${TAG#v}" >> "$GITHUB_OUTPUT"
+            echo "Code changed — will build and publish ${TAG}."
+          else
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "No release-relevant changes since ${LAST_TAG}; skipping release."
+          fi
+
+  build-and-publish:
+    name: Build Native AOT & Publish GitHub Release
+    needs: detect-changes
+    if: needs.detect-changes.outputs.should_release == 'true'
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Publish Native AOT Executables (win-x64)
+        shell: pwsh
+        env:
+          RELEASE_VER: ${{ needs.detect-changes.outputs.release_version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          dotnet publish YGORogueDuelistCardModInstaller/YGORogueDuelistCardModInstaller.csproj `
+            -c Release -r win-x64 -p:Version=$env:RELEASE_VER -o out/cli --nologo
+          dotnet publish YGORogueDuelistCardModInstaller.Avalonia/YGORogueDuelistCardModInstaller.Avalonia.csproj `
+            -c Release -r win-x64 -p:Version=$env:RELEASE_VER -o out/gui --nologo
+          dotnet publish YGORogueDuelistCardModInstaller.Mcp/YGORogueDuelistCardModInstaller.Mcp.csproj `
+            -c Release -r win-x64 -p:Version=$env:RELEASE_VER -o out/mcp --nologo
+
+      - name: Smoke Test Built Binaries
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          ./out/cli/YGORogueDuelistCardModInstaller.exe --help
+          $mcpResp = '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | ./out/mcp/YGORogueDuelistCardModInstaller.Mcp.exe
+          if (-not ($mcpResp -match '"tools"')) { throw "MCP smoke test failed" }
+
+      - name: Package Release Archives & SHA-256 Checksums
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ needs.detect-changes.outputs.release_tag }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force release-assets, stage-gui, stage-cli, stage-mcp, stage-full | Out-Null
+
+          # Clean PDB debug symbols from distribution archives
+          Get-ChildItem out -Recurse -Filter "*.pdb" | Remove-Item -Force
+
+          # 1. GUI package
+          Copy-Item out/gui/* stage-gui/ -Recurse
+          Copy-Item README.md, README.zh-CN.md, LICENSE stage-gui/
+          Compress-Archive -Path stage-gui/* -DestinationPath "release-assets/YGO-Rogue-ModManager-GUI-win-x64-$env:RELEASE_TAG.zip"
+
+          # 2. CLI package
+          Copy-Item out/cli/* stage-cli/ -Recurse
+          Copy-Item README.md, README.zh-CN.md, LICENSE stage-cli/
+          Compress-Archive -Path stage-cli/* -DestinationPath "release-assets/YGO-Rogue-ModManager-CLI-win-x64-$env:RELEASE_TAG.zip"
+
+          # 3. MCP Server package
+          Copy-Item out/mcp/* stage-mcp/ -Recurse
+          Copy-Item README.md, README.zh-CN.md, LICENSE stage-mcp/
+          Compress-Archive -Path stage-mcp/* -DestinationPath "release-assets/YGO-Rogue-ModManager-MCP-win-x64-$env:RELEASE_TAG.zip"
+
+          # 4. Full All-in-One package
+          New-Item -ItemType Directory -Force stage-full/gui, stage-full/cli, stage-full/mcp | Out-Null
+          Copy-Item out/gui/* stage-full/gui/ -Recurse
+          Copy-Item out/cli/* stage-full/cli/ -Recurse
+          Copy-Item out/mcp/* stage-full/mcp/ -Recurse
+          Copy-Item examples stage-full/examples -Recurse
+          Copy-Item docs stage-full/docs -Recurse
+          Copy-Item README.md, README.zh-CN.md, LICENSE stage-full/
+          Compress-Archive -Path stage-full/* -DestinationPath "release-assets/YGO-Rogue-ModManager-Full-win-x64-$env:RELEASE_TAG.zip"
+
+          # SHA-256 Checksums
+          Get-ChildItem release-assets/*.zip | ForEach-Object {
+            $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$h  $($_.Name)"
+          } | Set-Content -Encoding UTF8 release-assets/SHA256SUMS.txt
+
+          Get-ChildItem release-assets | Format-Table Name, Length -AutoSize
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.detect-changes.outputs.release_tag }}
+          name: "Yu-Gi-Oh! Rogue Duelist MOD Manager ${{ needs.detect-changes.outputs.release_tag }}"
+          generate_release_notes: true
+          make_latest: true
+          files: |
+            release-assets/*.zip
+            release-assets/SHA256SUMS.txt

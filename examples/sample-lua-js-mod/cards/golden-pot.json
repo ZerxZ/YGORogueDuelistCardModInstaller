@@ -1,0 +1,35 @@
+[
+  {
+    "id": 190099001,
+    "name": "Modder's Golden Pot",
+    "desc": "Draw 2 cards, then gain 500 LP. You can only activate 1 \"Modder's Golden Pot\" per turn.",
+    "zhName": "模组制作者的黄金之壶",
+    "zhDesc": "这个卡名的卡在1回合只能发动1张。\r\n①：自己从卡组抽2张，那之后自己回复500基本分。",
+    "zhStrings": [],
+    "type": "Spell Card",
+    "race": "Normal",
+    "attribute": "",
+    "level": 0,
+    "atk": 0,
+    "defense": 0,
+    "addToEraPool": true,
+    "data": {
+      "code": 190099001,
+      "alias": 0,
+      "setcodes": [],
+      "type": 2,
+      "level": 0,
+      "attribute": 0,
+      "race": "0",
+      "attack": 0,
+      "defense": 0,
+      "lscale": 0,
+      "rscale": 0,
+      "link_marker": 0
+    },
+    "strings": [
+      "", "", "", "", "", "", "", "",
+      "", "", "", "", "", "", "", ""
+    ]
+  }
+]

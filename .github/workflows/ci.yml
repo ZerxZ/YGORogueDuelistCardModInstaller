@@ -1,0 +1,72 @@
+name: CI Build & Verify
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "YGORogueDuelistCardModInstaller/**"
+      - "YGORogueDuelistCardModInstaller.Core/**"
+      - "YGORogueDuelistCardModInstaller.Avalonia/**"
+      - "YGORogueDuelistCardModInstaller.Mcp/**"
+      - "YGORogueDuelistCardModInstaller.slnx"
+      - "Directory.Build.props"
+      - "examples/**"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "YGORogueDuelistCardModInstaller/**"
+      - "YGORogueDuelistCardModInstaller.Core/**"
+      - "YGORogueDuelistCardModInstaller.Avalonia/**"
+      - "YGORogueDuelistCardModInstaller.Mcp/**"
+      - "YGORogueDuelistCardModInstaller.slnx"
+      - "Directory.Build.props"
+      - "examples/**"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-verify:
+    name: Build & Native AOT Smoke Check (win-x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore & Build Solution (Debug)
+        shell: pwsh
+        run: |
+          dotnet build YGORogueDuelistCardModInstaller.slnx -c Debug --nologo
+
+      - name: Validate Example JS ES Modules
+        shell: pwsh
+        run: |
+          Get-ChildItem examples -Recurse -Filter "*.js" | Where-Object { $_.Name -ne "mod.js" } | ForEach-Object {
+            Get-Content -Raw -Encoding UTF8 $_.FullName | node --input-type=module --check
+            if ($LASTEXITCODE -ne 0) { throw "ESM syntax error in $($_.FullName)" }
+          }
+
+      - name: Native AOT Publish All 3 Apps (win-x64)
+        shell: pwsh
+        run: |
+          dotnet publish YGORogueDuelistCardModInstaller/YGORogueDuelistCardModInstaller.csproj -c Release -r win-x64 -o dist/cli --nologo
+          dotnet publish YGORogueDuelistCardModInstaller.Avalonia/YGORogueDuelistCardModInstaller.Avalonia.csproj -c Release -r win-x64 -o dist/gui --nologo
+          dotnet publish YGORogueDuelistCardModInstaller.Mcp/YGORogueDuelistCardModInstaller.Mcp.csproj -c Release -r win-x64 -o dist/mcp --nologo
+
+      - name: Smoke Test Native AOT CLI & MCP
+        shell: pwsh
+        run: |
+          ./dist/cli/YGORogueDuelistCardModInstaller.exe --help
+          '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | ./dist/mcp/YGORogueDuelistCardModInstaller.Mcp.exe | Out-String | Write-Host

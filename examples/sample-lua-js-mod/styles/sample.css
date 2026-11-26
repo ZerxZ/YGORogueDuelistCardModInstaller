@@ -1,0 +1,25 @@
+/* 示例 MOD 独立样式表（自动作为 <link rel="stylesheet"> 注入页面） */
+.sample-mod-badge {
+  position: fixed;
+  top: 10px;
+  right: 12px;
+  z-index: 2147483630;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(201, 162, 39, 0.78);
+  background: rgba(12, 24, 36, 0.86);
+  color: #f4cf57;
+  font: 600 12px/1.2 "Microsoft YaHei UI", "Segoe UI", sans-serif;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  transition: transform 120ms ease, filter 120ms ease;
+}
+
+.sample-mod-badge:hover {
+  filter: brightness(1.18);
+  transform: translateY(-1px);
+}

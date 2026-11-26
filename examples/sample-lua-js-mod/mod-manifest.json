@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "sample-lua-js-mod",
+  "name": "示例 MOD（Lua 卡片 + JS 插件）",
+  "version": "1.0.0",
+  "author": "YGO Mod Manager",
+  "description": "完整演示 Mod Spec v1：包含 1 张声明式自制卡、Lua 辅助库与卡脚本、ES Module JS 插件（含 Fetch 钩子 / UI 增强 / 快捷键 / 本地存储）以及独立 CSS 样式。",
+  "gameVersion": "0.2.46",
+  "tags": [
+    "example",
+    "cards",
+    "lua",
+    "js",
+    "ui"
+  ],
+  "jsEntries": [
+    "js/main.js"
+  ],
+  "cssEntries": [
+    "styles/sample.css"
+  ],
+  "luaLibs": [
+    "lua/lib/sample_helpers.lua"
+  ],
+  "config": {
+    "showBootToast": true,
+    "showHudBadge": true,
+    "hotkey": "Alt+M"
+  }
+}

@@ -1,0 +1,686 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:YGORogueDuelistCardModInstaller.Avalonia.ViewModels"
+        xmlns:core="using:YGORogueDuelistCardModInstaller.Core.ModManager"
+        x:Class="YGORogueDuelistCardModInstaller.Avalonia.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="{Binding Loc.WindowTitle}"
+        Width="1180"
+        Height="860"
+        MinWidth="960"
+        MinHeight="720"
+        WindowStartupLocation="CenterScreen">
+
+    <Grid RowDefinitions="Auto,*,Auto,165" Margin="14" RowSpacing="10">
+
+        <!-- Row 0: Header + Multi-Workspace Switcher + Hot-Reload Bar + Primary Actions -->
+        <Border Grid.Row="0" Classes="card" Padding="14,10">
+            <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
+                <!-- Header Line 1: Title + Status + Main Actions -->
+                <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                    <StackPanel Spacing="2">
+                        <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding Loc.WindowTitle}"
+                                       FontSize="18"
+                                       FontWeight="Bold"
+                                       Foreground="#F8FAFC" />
+                            <Border Classes="chip" Padding="8,2" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding GameVersionBadge}"
+                                           Foreground="{Binding GameVersionBrush}"
+                                           FontSize="11.5"
+                                           FontWeight="SemiBold" />
+                            </Border>
+                            <Border Background="#052E16"
+                                    BorderBrush="#22C55E"
+                                    BorderThickness="1"
+                                    CornerRadius="10"
+                                    Padding="8,2"
+                                    VerticalAlignment="Center"
+                                    IsVisible="{Binding IsHotReloadRunning}">
+                                <TextBlock Text="{Binding HotReloadBadgeText}"
+                                           FontFamily="Cascadia Mono, Consolas, monospace"
+                                           FontSize="11"
+                                           FontWeight="Bold"
+                                           Foreground="#4ADE80" />
+                            </Border>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <TextBlock Text="{Binding SyncStatusText}"
+                                       Foreground="{Binding SyncStatusBrush}"
+                                       FontSize="12"
+                                       FontWeight="SemiBold" />
+                            <TextBlock Text="·" Foreground="#475569" FontSize="12" />
+                            <TextBlock Text="{Binding ModCountText}"
+                                       Foreground="#94A3B8"
+                                       FontSize="12" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <Button Classes="subtle"
+                                Content="{Binding Loc.LangToggleText}"
+                                ToolTip.Tip="{Binding Loc.LangToggleTooltip}"
+                                Command="{Binding ToggleLanguageCommand}" />
+                        <Button Classes="primary" Content="{Binding Loc.ApplyButton}" Command="{Binding ApplyCommand}" />
+                        <Button Classes="success" Content="{Binding Loc.ApplyAndLaunchButton}" Command="{Binding ApplyAndLaunchCommand}" />
+                        <Button Classes="danger" Content="{Binding Loc.RestoreButton}" Command="{Binding RestoreVanillaCommand}" />
+                    </StackPanel>
+                </Grid>
+
+                <!-- Header Line 2: Multi-Workspace Switcher + Hot-Reload Controls -->
+                <Grid Grid.Row="1" ColumnDefinitions="Auto,230,Auto,Auto,Auto,*,Auto,Auto,Auto,Auto" ColumnSpacing="6">
+                    <TextBlock Grid.Column="0" Text="{Binding Loc.WorkspaceLabel}" VerticalAlignment="Center" FontSize="12" Foreground="#CBD5E1" />
+                    <ComboBox Grid.Column="1"
+                              ItemsSource="{Binding Workspaces}"
+                              SelectedItem="{Binding SelectedWorkspace}"
+                              IsEnabled="{Binding IsIdle}"
+                              HorizontalAlignment="Stretch">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="core:WorkspaceProfile">
+                                <TextBlock Text="{Binding Name}" ToolTip.Tip="{Binding Path}" TextTrimming="CharacterEllipsis" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <Button Grid.Column="2" Classes="subtle" Content="{Binding Loc.NewWorkspaceButton}" Command="{Binding NewWorkspaceCommand}" />
+                    <Button Grid.Column="3" Classes="iconBtn" Content="📂" ToolTip.Tip="{Binding Loc.OpenWorkspaceTooltip}" Command="{Binding OpenWorkspaceFolderCommand}" />
+                    <Button Grid.Column="4" Classes="iconBtn" Content="×" Foreground="#FCA5A5" ToolTip.Tip="{Binding Loc.RemoveWorkspaceTooltip}" Command="{Binding RemoveWorkspaceCommand}" />
+
+                    <!-- Right side: Live Hot-Reload Controls -->
+                    <Button Grid.Column="6" Classes="subtle"
+                            Content="{Binding HotReloadToggleLabel}"
+                            Command="{Binding ToggleHotReloadCommand}" />
+                    <Button Grid.Column="7" Classes="subtle"
+                            Content="{Binding Loc.InjectHotReloadButton}"
+                            ToolTip.Tip="{Binding Loc.InjectHotReloadTooltip}"
+                            Command="{Binding InjectHotReloadBridgeCommand}" />
+                    <Button Grid.Column="8" Classes="subtle"
+                            Content="{Binding Loc.OpenLivePreviewButton}"
+                            ToolTip.Tip="{Binding Loc.OpenLivePreviewTooltip}"
+                            Command="{Binding OpenLivePreviewCommand}" />
+                    <Button Grid.Column="9" Classes="iconBtn"
+                            Content="↻"
+                            ToolTip.Tip="{Binding Loc.TriggerHotReloadButton}"
+                            Command="{Binding TriggerHotReloadNowCommand}" />
+                </Grid>
+
+                <!-- Header Line 3: Injection Mode + Developer Mode -->
+                <Grid Grid.Row="2" ColumnDefinitions="Auto,250,*,Auto" ColumnSpacing="10">
+                    <TextBlock Grid.Column="0" Text="{Binding Loc.InjectionModeLabel}" VerticalAlignment="Center" FontSize="12" Foreground="#CBD5E1" />
+                    <ComboBox Grid.Column="1"
+                              ItemsSource="{Binding InjectionModeOptions}"
+                              SelectedItem="{Binding SelectedInjectionMode}"
+                              IsEnabled="{Binding IsIdle}"
+                              HorizontalAlignment="Stretch">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:InjectionModeOption">
+                                <TextBlock Text="{Binding DisplayName}" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <TextBlock Grid.Column="2"
+                               Text="{Binding InjectionModeDescription}"
+                               VerticalAlignment="Center"
+                               FontSize="11.5"
+                               Foreground="#94A3B8"
+                               TextWrapping="Wrap" />
+                    <CheckBox Grid.Column="3"
+                              IsChecked="{Binding DeveloperMode}"
+                              IsEnabled="{Binding IsIdle}"
+                              Content="{Binding Loc.DeveloperModeLabel}"
+                              ToolTip.Tip="{Binding Loc.DeveloperModeTooltip}"
+                              FontSize="12"
+                              Foreground="#FDE047"
+                              VerticalAlignment="Center" />
+                </Grid>
+            </Grid>
+        </Border>
+
+        <!-- Row 1: Main Tabs -->
+        <TabControl Grid.Row="1" SelectedIndex="{Binding SelectedMainTabIndex}">
+
+            <!-- TAB 1: MOD Library & Load Order -->
+            <TabItem Header="{Binding Loc.TabMods}" FontSize="13.5">
+                <Grid RowDefinitions="Auto,*" RowSpacing="10" Margin="0,10,0,0">
+                    <WrapPanel Grid.Row="0" Orientation="Horizontal" ItemHeight="32">
+                        <Button Classes="subtle" Margin="0,0,8,0" Content="{Binding Loc.ImportZipButton}" Command="{Binding ImportZipCommand}" />
+                        <Button Classes="subtle" Margin="0,0,8,0" Content="{Binding Loc.ImportFolderButton}" Command="{Binding ImportFolderCommand}" />
+                        <Button Classes="subtle" Margin="0,0,8,0" Content="{Binding Loc.CreateTemplateButton}" Command="{Binding CreateTemplateCommand}" />
+                        <Button Classes="subtle" Margin="0,0,8,0" Content="{Binding Loc.PackWorkspaceButton}" Command="{Binding PackWorkspaceCommand}" />
+                        <Button Classes="subtle" Margin="0,0,8,0" Content="{Binding Loc.OpenModsFolderButton}" Command="{Binding OpenModsFolderCommand}" />
+                        <Button Classes="subtle" Margin="0,0,8,0" Content="{Binding Loc.EnableAllButton}" Command="{Binding EnableAllCommand}" />
+                        <Button Classes="subtle" Margin="0,0,8,0" Content="{Binding Loc.DisableAllButton}" Command="{Binding DisableAllCommand}" />
+                        <Button Classes="subtle" Margin="0,0,8,0" Content="{Binding Loc.RefreshButton}" Command="{Binding RefreshCommand}" />
+                    </WrapPanel>
+
+                    <Grid Grid.Row="1" ColumnDefinitions="*,375" ColumnSpacing="12">
+                        <Border Grid.Column="0" Classes="card" Padding="8">
+                            <Grid RowDefinitions="Auto,*">
+                                <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="6,2,6,8">
+                                    <TextBlock Text="{Binding Loc.LoadOrderHint}" FontSize="12" Foreground="#94A3B8" />
+                                    <TextBlock Grid.Column="1" Text="{Binding Loc.ApplyHint}" FontSize="11.5" Foreground="#64748B" />
+                                </Grid>
+
+                                <ListBox Grid.Row="1" ItemsSource="{Binding Mods}" SelectedItem="{Binding SelectedMod}">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:ModItemViewModel">
+                                            <Border Background="#141923" BorderBrush="#273044" BorderThickness="1" CornerRadius="8" Padding="10,8">
+                                                <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="10">
+                                                    <CheckBox Grid.Column="0" IsChecked="{Binding Enabled}" VerticalAlignment="Center" />
+                                                    <Border Grid.Column="1" Background="#1E293B" CornerRadius="5" Padding="7,3" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding OrderBadge}" FontFamily="Cascadia Mono, Consolas, monospace" FontSize="12" FontWeight="Bold" Foreground="#60A5FA" />
+                                                    </Border>
+                                                    <StackPanel Grid.Column="2" Spacing="2" VerticalAlignment="Center">
+                                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                                            <TextBlock Text="{Binding Name}" FontSize="13.5" FontWeight="SemiBold" Foreground="#F1F5F9" />
+                                                            <TextBlock Text="{Binding Version, StringFormat='v{0}'}" FontSize="12" Foreground="#94A3B8" VerticalAlignment="Center" />
+                                                            <Border Background="#422006" BorderBrush="#CA8A04" BorderThickness="1" CornerRadius="4" Padding="5,1"
+                                                                    IsVisible="{Binding HasConflict}" ToolTip.Tip="{Binding ConflictTooltip}">
+                                                                <TextBlock Text="!" FontSize="10.5" FontWeight="Bold" Foreground="#FDE047" />
+                                                            </Border>
+                                                            <Border Background="#450A0A" BorderBrush="#DC2626" BorderThickness="1" CornerRadius="4" Padding="5,1"
+                                                                    IsVisible="{Binding HasVersionIssue}" ToolTip.Tip="{Binding VersionIssueTooltip}">
+                                                                <TextBlock Text="VER" FontSize="10" FontWeight="Bold" Foreground="#FCA5A5" />
+                                                            </Border>
+                                                        </StackPanel>
+                                                        <TextBlock Text="{Binding SummaryText}" FontSize="11.5" Foreground="#94A3B8" TextTrimming="CharacterEllipsis" />
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                                        <Button Classes="iconBtn" Content="↑" Command="{Binding MoveUpCommand}" />
+                                                        <Button Classes="iconBtn" Content="↓" Command="{Binding MoveDownCommand}" />
+                                                        <Button Classes="iconBtn" Content="×" Foreground="#FCA5A5" Command="{Binding DeleteCommand}" />
+                                                    </StackPanel>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </Grid>
+                        </Border>
+
+                        <Grid Grid.Column="1" RowDefinitions="*,Auto,Auto" RowSpacing="10">
+                            <Border Grid.Row="0" Classes="card">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                    <StackPanel Spacing="8" IsVisible="{Binding HasSelectedMod}">
+                                        <TextBlock Text="{Binding SelectedMod.Name}" FontSize="15" FontWeight="Bold" Foreground="#F8FAFC" TextWrapping="Wrap" />
+                                        <WrapPanel Orientation="Horizontal">
+                                            <Border Classes="chip" Padding="7,3" Margin="0,0,6,6">
+                                                <TextBlock Text="{Binding SelectedMod.Id, StringFormat='ID: {0}'}" FontSize="11.5" Foreground="#CBD5E1" />
+                                            </Border>
+                                            <Border Classes="chip" Padding="7,3" Margin="0,0,6,6">
+                                                <TextBlock Text="{Binding SelectedMod.VersionBadgeText}" FontSize="11.5" Foreground="#CBD5E1" />
+                                            </Border>
+                                            <Border Classes="chip" Padding="7,3" Margin="0,0,6,6">
+                                                <TextBlock Text="{Binding SelectedMod.CompatBadgeText}" FontSize="11.5" Foreground="#93C5FD" />
+                                            </Border>
+                                        </WrapPanel>
+                                        <TextBlock Text="{Binding SelectedMod.AuthorDisplay}" FontSize="12" Foreground="#94A3B8" />
+                                        <TextBlock Text="{Binding SelectedMod.Description}" FontSize="12.5" Foreground="#E2E8F0" TextWrapping="Wrap" LineHeight="19" />
+                                        <Border Background="#131823" CornerRadius="6" Padding="10,8">
+                                            <StackPanel Spacing="4">
+                                                <TextBlock Text="{Binding Loc.ContentsLabel}" FontSize="11.5" Foreground="#94A3B8" />
+                                                <TextBlock Text="{Binding SelectedMod.SummaryText}" FontSize="12.5" Foreground="#4ADE80" TextWrapping="Wrap" />
+                                            </StackPanel>
+                                        </Border>
+                                        <StackPanel Spacing="4" IsVisible="{Binding SelectedMod.HasOverrides}">
+                                            <TextBlock Text="{Binding Loc.OverridesLabel}" FontSize="11.5" Foreground="#94A3B8" />
+                                            <ItemsControl ItemsSource="{Binding SelectedMod.OverridePaths}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate x:DataType="x:String">
+                                                        <TextBlock Text="{Binding}" FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11.5" Foreground="#CBD5E1" />
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
+                                        <WrapPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                            <Button Classes="primary" Margin="0,0,8,6" Content="{Binding Loc.EditInStudioButton}" Command="{Binding EditSelectedModInStudioCommand}" />
+                                            <Button Classes="subtle" Margin="0,0,8,6" Content="{Binding Loc.OpenModFolderButton}" Command="{Binding SelectedMod.OpenFolderCommand}" />
+                                            <Button Classes="subtle" Margin="0,0,8,6" Content="{Binding Loc.PackThisModButton}" Command="{Binding SelectedMod.PackCommand}" />
+                                        </WrapPanel>
+                                    </StackPanel>
+                                </ScrollViewer>
+                            </Border>
+
+                            <Border Grid.Row="1" Classes="card" BorderBrush="#DC2626" IsVisible="{Binding HasVersionIssues}" MaxHeight="110">
+                                <Grid RowDefinitions="Auto,*" RowSpacing="4">
+                                    <TextBlock Grid.Row="0" Text="{Binding Loc.VersionIssuesHeader}" FontSize="12" FontWeight="SemiBold" Foreground="#FCA5A5" />
+                                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                                        <ItemsControl ItemsSource="{Binding VersionIssues}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:VersionIssueItemViewModel">
+                                                    <TextBlock FontSize="11.5" Foreground="#FECACA" TextWrapping="Wrap" Margin="0,0,0,3">
+                                                        <Run Text="[" FontWeight="Bold" /><Run Text="{Binding ModId}" FontWeight="Bold" /><Run Text="] " FontWeight="Bold" /><Run Text="{Binding Message}" />
+                                                    </TextBlock>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                </Grid>
+                            </Border>
+
+                            <Border Grid.Row="2" Classes="card" MaxHeight="155">
+                                <Grid RowDefinitions="Auto,*" RowSpacing="6">
+                                    <TextBlock Grid.Row="0" Text="{Binding ConflictsHeader}" FontSize="12.5" FontWeight="SemiBold" Foreground="#FDE047" />
+                                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                                        <ItemsControl ItemsSource="{Binding Conflicts}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:ConflictItemViewModel">
+                                                    <Border Background="#151A25" CornerRadius="5" Padding="8,5" Margin="0,0,0,4">
+                                                        <StackPanel Spacing="1">
+                                                            <TextBlock FontSize="11.5" Foreground="#F8FAFC">
+                                                                <Run Text="[" Foreground="#FACC15" /><Run Text="{Binding Category}" Foreground="#FACC15" /><Run Text="] " Foreground="#FACC15" /><Run Text="{Binding ResourceKey}" FontWeight="SemiBold" />
+                                                            </TextBlock>
+                                                            <TextBlock FontSize="11" Foreground="#94A3B8" TextWrapping="Wrap">
+                                                                <Run Text="{Binding ChainText}" /><Run Text="  (" /><Run Text="{Binding WinnerText}" Foreground="#4ADE80" /><Run Text=")" />
+                                                            </TextBlock>
+                                                        </StackPanel>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                </Grid>
+                            </Border>
+                        </Grid>
+                    </Grid>
+                </Grid>
+            </TabItem>
+
+            <!-- TAB 2: Immersive Visual MOD Studio (Beginner Workbench) -->
+            <TabItem Header="{Binding Loc.TabStudio}" FontSize="13.5">
+                <Grid RowDefinitions="Auto,*" RowSpacing="10" Margin="0,10,0,0">
+                    <!-- Studio Header Toolbar -->
+                    <Border Grid.Row="0" Classes="card" Padding="10,8">
+                        <Grid ColumnDefinitions="Auto,240,Auto,Auto,Auto,*" ColumnSpacing="8">
+                            <TextBlock Grid.Column="0" Text="{Binding Loc.StudioTargetModLabel}" VerticalAlignment="Center" FontSize="12.5" Foreground="#CBD5E1" />
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding Studio.AvailableMods}"
+                                      SelectedItem="{Binding Studio.SelectedMod}"
+                                      HorizontalAlignment="Stretch">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="core:ManagedMod">
+                                        <TextBlock Text="{Binding Manifest.Name}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                            <Button Grid.Column="2" Classes="primary" Content="{Binding Loc.StudioQuickNewMod}" Command="{Binding CreateTemplateCommand}" />
+                            <Button Grid.Column="3" Classes="subtle" Content="{Binding Loc.StudioScaffoldDslButton}" Command="{Binding Studio.ScaffoldDslCommand}" />
+                            <Button Grid.Column="4" Classes="subtle" Content="{Binding Loc.StudioValidateButton}" Command="{Binding Studio.ValidateModCommand}" />
+                            <TextBlock Grid.Column="5"
+                                       Text="{Binding Studio.StudioStatusMessage}"
+                                       VerticalAlignment="Center"
+                                       HorizontalAlignment="Right"
+                                       FontSize="12"
+                                       Foreground="#4ADE80"
+                                       TextTrimming="CharacterEllipsis" />
+                        </Grid>
+                    </Border>
+
+                    <!-- Studio Body: Left File Explorer + Right Visual Builders -->
+                    <Grid Grid.Row="1" ColumnDefinitions="235,*" ColumnSpacing="10">
+                        <!-- Left: MOD File Explorer -->
+                        <Border Grid.Column="0" Classes="card" Padding="8">
+                            <Grid RowDefinitions="Auto,*" RowSpacing="6">
+                                <TextBlock Grid.Row="0" Text="{Binding Loc.StudioFilesHeader}" FontSize="12" FontWeight="SemiBold" Foreground="#94A3B8" Margin="4,0,0,0" />
+                                <ListBox Grid.Row="1" ItemsSource="{Binding Studio.ModFiles}" SelectedItem="{Binding Studio.SelectedFile}">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate x:DataType="x:String">
+                                            <TextBlock Text="{Binding}" FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11.5" Foreground="#E2E8F0" TextTrimming="CharacterEllipsis" />
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </Grid>
+                        </Border>
+
+                        <!-- Right: 6 Visual Authoring Sub-Tabs -->
+                        <Border Grid.Column="1" Classes="card" Padding="10">
+                            <Grid>
+                                <TextBlock Text="{Binding Loc.StudioNoModHint}"
+                                           IsVisible="{Binding Studio.HasNoMod}"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           FontSize="14"
+                                           Foreground="#94A3B8" />
+
+                                <TabControl IsVisible="{Binding Studio.HasSelectedMod}" SelectedIndex="{Binding Studio.SelectedSubTabIndex}">
+                                    <!-- SubTab 0: Visual Card Builder -->
+                                    <TabItem Header="{Binding Loc.StudioTabCard}">
+                                        <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,8,0,0">
+                                            <StackPanel Spacing="8">
+                                                <Grid ColumnDefinitions="130,110,*,180" ColumnSpacing="8">
+                                                    <StackPanel Grid.Column="0" Spacing="3">
+                                                        <TextBlock Text="Card ID *" FontSize="11.5" Foreground="#94A3B8" />
+                                                        <TextBox Text="{Binding Studio.CardId}" />
+                                                    </StackPanel>
+                                                    <Button Grid.Column="1" Classes="subtle" VerticalAlignment="Bottom" Content="{Binding Loc.StudioAutoId}" Command="{Binding Studio.AutoSuggestCardIdCommand}" />
+                                                    <StackPanel Grid.Column="2" Spacing="3">
+                                                        <TextBlock Text="Card Type Preset" FontSize="11.5" Foreground="#94A3B8" />
+                                                        <ComboBox ItemsSource="{Binding Studio.CardPresets}" SelectedItem="{Binding Studio.SelectedCardPreset}" HorizontalAlignment="Stretch">
+                                                            <ComboBox.ItemTemplate>
+                                                                <DataTemplate x:DataType="core:CardPresetInfo">
+                                                                    <TextBlock Text="{Binding Label}" />
+                                                                </DataTemplate>
+                                                            </ComboBox.ItemTemplate>
+                                                        </ComboBox>
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Column="3" Spacing="3">
+                                                        <TextBlock Text="Pack ID (opt.)" FontSize="11.5" Foreground="#94A3B8" />
+                                                        <TextBox Text="{Binding Studio.CardPackId}" Watermark="EN-CUSTOM" />
+                                                    </StackPanel>
+                                                </Grid>
+
+                                                <Border Background="#131823" CornerRadius="5" Padding="8,4">
+                                                    <TextBlock Text="{Binding Studio.CardBitmaskPreview}" FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11.5" Foreground="#60A5FA" />
+                                                </Border>
+
+                                                <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                                    <StackPanel Grid.Column="0" Spacing="3">
+                                                        <TextBlock Text="English Name *" FontSize="11.5" Foreground="#94A3B8" />
+                                                        <TextBox Text="{Binding Studio.CardName}" />
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Column="1" Spacing="3">
+                                                        <TextBlock Text="中文卡名" FontSize="11.5" Foreground="#94A3B8" />
+                                                        <TextBox Text="{Binding Studio.CardZhName}" />
+                                                    </StackPanel>
+                                                </Grid>
+
+                                                <Grid ColumnDefinitions="*,*,90,100,100" ColumnSpacing="8" IsVisible="{Binding Studio.IsMonsterCard}">
+                                                    <StackPanel Grid.Column="0" Spacing="3">
+                                                        <TextBlock Text="Race / 种族" FontSize="11.5" Foreground="#94A3B8" />
+                                                        <ComboBox ItemsSource="{Binding Studio.MonsterRaceChoices}" SelectedItem="{Binding Studio.CardRace}" HorizontalAlignment="Stretch" />
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Column="1" Spacing="3">
+                                                        <TextBlock Text="Attribute / 属性" FontSize="11.5" Foreground="#94A3B8" />
+                                                        <ComboBox ItemsSource="{Binding Studio.AttributeChoices}" SelectedItem="{Binding Studio.CardAttribute}" HorizontalAlignment="Stretch" />
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Column="2" Spacing="3">
+                                                        <TextBlock Text="Level" FontSize="11.5" Foreground="#94A3B8" />
+                                                        <TextBox Text="{Binding Studio.CardLevel}" />
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Column="3" Spacing="3">
+                                                        <TextBlock Text="ATK" FontSize="11.5" Foreground="#94A3B8" />
+                                                        <TextBox Text="{Binding Studio.CardAtk}" />
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Column="4" Spacing="3">
+                                                        <TextBlock Text="DEF" FontSize="11.5" Foreground="#94A3B8" />
+                                                        <TextBox Text="{Binding Studio.CardDef}" />
+                                                    </StackPanel>
+                                                </Grid>
+
+                                                <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                                    <StackPanel Grid.Column="0" Spacing="3">
+                                                        <TextBlock Text="English Effect Text" FontSize="11.5" Foreground="#94A3B8" />
+                                                        <TextBox Text="{Binding Studio.CardDesc}" AcceptsReturn="True" TextWrapping="Wrap" Height="56" />
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Column="1" Spacing="3">
+                                                        <TextBlock Text="中文效果描述" FontSize="11.5" Foreground="#94A3B8" />
+                                                        <TextBox Text="{Binding Studio.CardZhDesc}" AcceptsReturn="True" TextWrapping="Wrap" Height="56" />
+                                                    </StackPanel>
+                                                </Grid>
+
+                                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                                    <TextBox Grid.Column="0" Text="{Binding Studio.CardArtPath}" Watermark="卡图文件路径（可选，保存时自动复制到 art/&lt;id&gt;.*）" />
+                                                    <Button Grid.Column="1" Classes="subtle" Content="{Binding Loc.StudioPickArt}" Command="{Binding Studio.PickCardArtCommand}" />
+                                                </Grid>
+
+                                                <Grid ColumnDefinitions="Auto,230,Auto,*" ColumnSpacing="8">
+                                                    <TextBlock Grid.Column="0" Text="Lua 模板：" VerticalAlignment="Center" FontSize="11.5" Foreground="#94A3B8" />
+                                                    <ComboBox Grid.Column="1" ItemsSource="{Binding Studio.CardLuaTemplates}" SelectedItem="{Binding Studio.SelectedCardLuaTemplate}" HorizontalAlignment="Stretch">
+                                                        <ComboBox.ItemTemplate>
+                                                            <DataTemplate x:DataType="vm:LuaTemplateOption">
+                                                                <TextBlock Text="{Binding DisplayName}" />
+                                                            </DataTemplate>
+                                                        </ComboBox.ItemTemplate>
+                                                    </ComboBox>
+                                                    <Button Grid.Column="2" Classes="subtle" Content="{Binding Loc.StudioFillLua}" Command="{Binding Studio.FillCardLuaTemplateCommand}" />
+                                                    <Button Grid.Column="3" Classes="success" HorizontalAlignment="Right" Content="{Binding Loc.StudioSaveCard}" Command="{Binding Studio.SaveCardCommand}" />
+                                                </Grid>
+
+                                                <TextBox Text="{Binding Studio.CardLuaScript}"
+                                                         AcceptsReturn="True"
+                                                         FontFamily="Cascadia Mono, Consolas, monospace"
+                                                         FontSize="12"
+                                                         Height="145" />
+                                            </StackPanel>
+                                        </ScrollViewer>
+                                    </TabItem>
+
+                                    <!-- SubTab 1: Character Builder -->
+                                    <TabItem Header="{Binding Loc.StudioTabCharacter}">
+                                        <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,8,0,0">
+                                            <StackPanel Spacing="8">
+                                                <Grid ColumnDefinitions="*,*,140" ColumnSpacing="8">
+                                                    <StackPanel Grid.Column="0" Spacing="3"><TextBlock Text="Name *" FontSize="11.5" Foreground="#94A3B8" /><TextBox Text="{Binding Studio.CharName}" /></StackPanel>
+                                                    <StackPanel Grid.Column="1" Spacing="3"><TextBlock Text="中文名" FontSize="11.5" Foreground="#94A3B8" /><TextBox Text="{Binding Studio.CharZhName}" /></StackPanel>
+                                                    <StackPanel Grid.Column="2" Spacing="3"><TextBlock Text="Sprite" FontSize="11.5" Foreground="#94A3B8" /><TextBox Text="{Binding Studio.CharSprite}" /></StackPanel>
+                                                </Grid>
+                                                <Grid ColumnDefinitions="*,*,120,140" ColumnSpacing="8">
+                                                    <StackPanel Grid.Column="0" Spacing="3"><TextBlock Text="Race" FontSize="11.5" Foreground="#94A3B8" /><TextBox Text="{Binding Studio.CharRace}" /></StackPanel>
+                                                    <StackPanel Grid.Column="1" Spacing="3"><TextBlock Text="Attribute" FontSize="11.5" Foreground="#94A3B8" /><TextBox Text="{Binding Studio.CharAttribute}" /></StackPanel>
+                                                    <StackPanel Grid.Column="2" Spacing="3"><TextBlock Text="Theme Color" FontSize="11.5" Foreground="#94A3B8" /><TextBox Text="{Binding Studio.CharColor}" /></StackPanel>
+                                                    <StackPanel Grid.Column="3" Spacing="3"><TextBlock Text="Starting Relic" FontSize="11.5" Foreground="#94A3B8" /><TextBox Text="{Binding Studio.CharStartingRelic}" /></StackPanel>
+                                                </Grid>
+                                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                                                    <StackPanel Grid.Column="0" Spacing="3"><TextBlock Text="Starting Packs (comma separated, e.g. EN-CUSTOM)" FontSize="11.5" Foreground="#94A3B8" /><TextBox Text="{Binding Studio.CharStartingPacks}" /></StackPanel>
+                                                    <CheckBox Grid.Column="1" VerticalAlignment="Bottom" IsChecked="{Binding Studio.CharUnlocked}" Content="Unlocked By Default / 默认解锁" />
+                                                </Grid>
+                                                <StackPanel Spacing="3">
+                                                    <TextBlock Text="Starting Deck Card Names (comma or newline separated — MUST use English card names!)" FontSize="11.5" Foreground="#94A3B8" />
+                                                    <TextBox Text="{Binding Studio.CharDeckCards}" AcceptsReturn="True" TextWrapping="Wrap" Height="130" />
+                                                </StackPanel>
+                                                <Button Classes="success" HorizontalAlignment="Right" Content="{Binding Loc.StudioSaveCharacter}" Command="{Binding Studio.SaveCharacterCommand}" />
+                                            </StackPanel>
+                                        </ScrollViewer>
+                                    </TabItem>
+
+                                    <!-- SubTab 2: Relic Builder -->
+                                    <TabItem Header="{Binding Loc.StudioTabRelic}">
+                                        <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,8,0,0">
+                                            <StackPanel Spacing="8">
+                                                <Grid ColumnDefinitions="*,180,180,90,110" ColumnSpacing="8">
+                                                    <StackPanel Grid.Column="0" Spacing="3"><TextBlock Text="Relic Key *" FontSize="11.5" Foreground="#94A3B8" /><TextBox Text="{Binding Studio.RelicKey}" /></StackPanel>
+                                                    <StackPanel Grid.Column="1" Spacing="3"><TextBlock Text="English Name" FontSize="11.5" Foreground="#94A3B8" /><TextBox Text="{Binding Studio.RelicName}" /></StackPanel>
+                                                    <StackPanel Grid.Column="2" Spacing="3"><TextBlock Text="中文名" FontSize="11.5" Foreground="#94A3B8" /><TextBox Text="{Binding Studio.RelicZhName}" /></StackPanel>
+                                                    <StackPanel Grid.Column="3" Spacing="3"><TextBlock Text="Cost" FontSize="11.5" Foreground="#94A3B8" /><TextBox Text="{Binding Studio.RelicCost}" /></StackPanel>
+                                                    <StackPanel Grid.Column="4" Spacing="3"><TextBlock Text="Tag" FontSize="11.5" Foreground="#94A3B8" /><TextBox Text="{Binding Studio.RelicTag}" /></StackPanel>
+                                                </Grid>
+                                                <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                                    <StackPanel Grid.Column="0" Spacing="3"><TextBlock Text="English Description" FontSize="11.5" Foreground="#94A3B8" /><TextBox Text="{Binding Studio.RelicDesc}" AcceptsReturn="True" TextWrapping="Wrap" Height="56" /></StackPanel>
+                                                    <StackPanel Grid.Column="1" Spacing="3"><TextBlock Text="中文描述" FontSize="11.5" Foreground="#94A3B8" /><TextBox Text="{Binding Studio.RelicZhDesc}" AcceptsReturn="True" TextWrapping="Wrap" Height="56" /></StackPanel>
+                                                </Grid>
+                                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                                    <TextBox Grid.Column="0" Text="{Binding Studio.RelicArt}" Watermark="Merchant Urn.png 或选择本地图标图片" />
+                                                    <Button Grid.Column="1" Classes="subtle" Content="{Binding Loc.StudioPickArt}" Command="{Binding Studio.PickRelicArtCommand}" />
+                                                </Grid>
+                                                <Grid ColumnDefinitions="Auto,230,Auto,*" ColumnSpacing="8">
+                                                    <TextBlock Grid.Column="0" Text="Lua 模板：" VerticalAlignment="Center" FontSize="11.5" Foreground="#94A3B8" />
+                                                    <ComboBox Grid.Column="1" ItemsSource="{Binding Studio.RelicLuaTemplates}" SelectedItem="{Binding Studio.SelectedRelicLuaTemplate}" HorizontalAlignment="Stretch">
+                                                        <ComboBox.ItemTemplate>
+                                                            <DataTemplate x:DataType="vm:LuaTemplateOption"><TextBlock Text="{Binding DisplayName}" /></DataTemplate>
+                                                        </ComboBox.ItemTemplate>
+                                                    </ComboBox>
+                                                    <Button Grid.Column="2" Classes="subtle" Content="{Binding Loc.StudioFillLua}" Command="{Binding Studio.FillRelicLuaTemplateCommand}" />
+                                                    <Button Grid.Column="3" Classes="success" HorizontalAlignment="Right" Content="{Binding Loc.StudioSaveRelic}" Command="{Binding Studio.SaveRelicCommand}" />
+                                                </Grid>
+                                                <TextBox Text="{Binding Studio.RelicLuaEffect}" AcceptsReturn="True" FontFamily="Cascadia Mono, Consolas, monospace" FontSize="12" Height="130" />
+                                            </StackPanel>
+                                        </ScrollViewer>
+                                    </TabItem>
+
+                                    <!-- SubTab 3: Booster Packs & Preconstructed Decks / .ydk -->
+                                    <TabItem Header="{Binding Loc.StudioTabPackDeck}">
+                                        <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,8,0,0">
+                                            <StackPanel Spacing="12">
+                                                <Border Background="#131823" CornerRadius="6" Padding="10">
+                                                    <StackPanel Spacing="6">
+                                                        <TextBlock Text="Booster Pack / 自定义补充卡包 (packs/*.json)" FontWeight="SemiBold" Foreground="#93C5FD" />
+                                                        <Grid ColumnDefinitions="130,*,*,80,70" ColumnSpacing="6">
+                                                            <TextBox Grid.Column="0" Text="{Binding Studio.PackId}" Watermark="EN-CUSTOM" />
+                                                            <TextBox Grid.Column="1" Text="{Binding Studio.PackName}" Watermark="Pack Name" />
+                                                            <TextBox Grid.Column="2" Text="{Binding Studio.PackZhName}" Watermark="中文卡包名" />
+                                                            <TextBox Grid.Column="3" Text="{Binding Studio.PackCode}" Watermark="Code" />
+                                                            <TextBox Grid.Column="4" Text="{Binding Studio.PackSize}" Watermark="Size" />
+                                                        </Grid>
+                                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                                                            <TextBox Grid.Column="0" Text="{Binding Studio.PackCommonIds}" Watermark="Common Card IDs (comma separated)" />
+                                                            <TextBox Grid.Column="1" Text="{Binding Studio.PackRareIds}" Watermark="Rare Card IDs" />
+                                                        </Grid>
+                                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                                                            <TextBox Grid.Column="0" Text="{Binding Studio.PackSuperIds}" Watermark="Super Rare Card IDs" />
+                                                            <TextBox Grid.Column="1" Text="{Binding Studio.PackUltraIds}" Watermark="Ultra Rare Card IDs" />
+                                                        </Grid>
+                                                        <Button Classes="success" HorizontalAlignment="Right" Content="{Binding Loc.StudioSavePack}" Command="{Binding Studio.SavePackCommand}" />
+                                                    </StackPanel>
+                                                </Border>
+
+                                                <Border Background="#131823" CornerRadius="6" Padding="10">
+                                                    <StackPanel Spacing="6">
+                                                        <Grid ColumnDefinitions="*,Auto">
+                                                            <TextBlock Text="Preconstructed Deck &amp; .ydk / 预组卡组构筑" FontWeight="SemiBold" Foreground="#4ADE80" VerticalAlignment="Center" />
+                                                            <Button Grid.Column="1" Classes="subtle" Content="{Binding Loc.StudioImportYdk}" Command="{Binding Studio.ImportYdkCommand}" />
+                                                        </Grid>
+                                                        <Grid ColumnDefinitions="150,*,*,90" ColumnSpacing="6">
+                                                            <TextBox Grid.Column="0" Text="{Binding Studio.DeckId}" Watermark="Deck ID" />
+                                                            <TextBox Grid.Column="1" Text="{Binding Studio.DeckName}" Watermark="English Name" />
+                                                            <TextBox Grid.Column="2" Text="{Binding Studio.DeckZhName}" Watermark="中文名" />
+                                                            <TextBox Grid.Column="3" Text="{Binding Studio.DeckArt}" Watermark="Art (SDK)" />
+                                                        </Grid>
+                                                        <TextBox Text="{Binding Studio.DeckCardIds}" AcceptsReturn="True" TextWrapping="Wrap" Height="64" Watermark="Numeric Card IDs (comma/space/newline separated)" />
+                                                        <Button Classes="success" HorizontalAlignment="Right" Content="{Binding Loc.StudioSaveDeck}" Command="{Binding Studio.SaveDeckCommand}" />
+                                                    </StackPanel>
+                                                </Border>
+                                            </StackPanel>
+                                        </ScrollViewer>
+                                    </TabItem>
+
+                                    <!-- SubTab 4: Visual Trainer Builder -->
+                                    <TabItem Header="{Binding Loc.StudioTabTrainer}">
+                                        <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,8,0,0">
+                                            <StackPanel Spacing="10">
+                                                <WrapPanel Orientation="Horizontal">
+                                                    <CheckBox Margin="0,0,18,6" IsChecked="{Binding Studio.TrainerUnlockChars}" Content="Unlock All Characters / 解锁全角色" />
+                                                    <CheckBox Margin="0,0,18,6" IsChecked="{Binding Studio.TrainerUnlockVariants}" Content="Unlock All Variants / 解锁全难度与形态" />
+                                                    <CheckBox Margin="0,0,18,6" IsChecked="{Binding Studio.TrainerFreeShop}" Content="Free Shop / 商店免费" />
+                                                    <CheckBox Margin="0,0,18,6" IsChecked="{Binding Studio.TrainerOverlay}" Content="In-Game F8 Trainer Panel / 游戏内 F8 修改面板" />
+                                                </WrapPanel>
+                                                <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
+                                                    <StackPanel Grid.Column="0" Spacing="3"><TextBlock Text="Starting Gold / 初始金币" FontSize="11.5" Foreground="#94A3B8" /><TextBox Text="{Binding Studio.TrainerStartingGold}" /></StackPanel>
+                                                    <StackPanel Grid.Column="1" Spacing="3"><TextBlock Text="Gold Bonus / 额外初始金币" FontSize="11.5" Foreground="#94A3B8" /><TextBox Text="{Binding Studio.TrainerGoldBonus}" /></StackPanel>
+                                                    <StackPanel Grid.Column="2" Spacing="3"><TextBlock Text="Starting LP / 初始生命" FontSize="11.5" Foreground="#94A3B8" /><TextBox Text="{Binding Studio.TrainerStartingLp}" /></StackPanel>
+                                                </Grid>
+                                                <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
+                                                    <StackPanel Grid.Column="0" Spacing="3"><TextBlock Text="Shop Price Multiplier (e.g. 0.5)" FontSize="11.5" Foreground="#94A3B8" /><TextBox Text="{Binding Studio.TrainerShopMult}" /></StackPanel>
+                                                    <StackPanel Grid.Column="1" Spacing="3"><TextBlock Text="Reward Gold Multiplier (e.g. 2.0)" FontSize="11.5" Foreground="#94A3B8" /><TextBox Text="{Binding Studio.TrainerRewardMult}" /></StackPanel>
+                                                    <StackPanel Grid.Column="2" Spacing="3"><TextBlock Text="Starting Relics (comma separated)" FontSize="11.5" Foreground="#94A3B8" /><TextBox Text="{Binding Studio.TrainerStartingRelics}" /></StackPanel>
+                                                </Grid>
+                                                <Button Classes="success" HorizontalAlignment="Right" Content="{Binding Loc.StudioSaveTrainer}" Command="{Binding Studio.SaveTrainerCommand}" />
+                                            </StackPanel>
+                                        </ScrollViewer>
+                                    </TabItem>
+
+                                    <!-- SubTab 5: Live Code & Xmake DSL Editor -->
+                                    <TabItem Header="{Binding Loc.StudioTabCode}">
+                                        <Grid RowDefinitions="Auto,*" RowSpacing="8" Margin="0,8,0,0">
+                                            <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                                <TextBox Grid.Column="0" Text="{Binding Studio.CodeRelativePath}" FontFamily="Cascadia Mono, Consolas, monospace" Watermark="mod.lua / mod.js / js/main.js / styles/mod.css" />
+                                                <Button Grid.Column="1" Classes="success" Content="{Binding Loc.StudioSaveCode}" Command="{Binding Studio.SaveCodeFileCommand}" />
+                                            </Grid>
+                                            <TextBox Grid.Row="1"
+                                                     Text="{Binding Studio.CodeContent}"
+                                                     AcceptsReturn="True"
+                                                     AcceptsTab="True"
+                                                     FontFamily="Cascadia Mono, Consolas, monospace"
+                                                     FontSize="12.5"
+                                                     TextWrapping="NoWrap" />
+                                        </Grid>
+                                    </TabItem>
+                                </TabControl>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </Grid>
+            </TabItem>
+
+            <!-- TAB 3: Game Paths, Updates & Export -->
+            <TabItem Header="{Binding Loc.TabSettings}" FontSize="13.5">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,10,0,0">
+                    <StackPanel Spacing="12">
+                        <Border Classes="card">
+                            <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" ColumnDefinitions="165,*,Auto" RowSpacing="8" ColumnSpacing="8">
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding Loc.WorkspaceDirLabel}" VerticalAlignment="Center" Foreground="#CBD5E1" />
+                                <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding WorkspaceRoot}" IsReadOnly="True" />
+                                <Button Grid.Row="0" Grid.Column="2" Classes="subtle" Content="{Binding Loc.SwitchDirButton}" Command="{Binding BrowseWorkspaceCommand}" />
+
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="{Binding Loc.InstallDirLabel}" VerticalAlignment="Center" Foreground="#CBD5E1" />
+                                <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding InstallDir}" IsEnabled="{Binding IsIdle}" Watermark="{Binding Loc.InstallDirWatermark}" />
+                                <Button Grid.Row="1" Grid.Column="2" Classes="subtle" Content="{Binding Loc.BrowseButton}" Command="{Binding BrowseInstallDirCommand}" />
+
+                                <TextBlock Grid.Row="2" Grid.Column="0" Text="{Binding Loc.GameDirLabel}" VerticalAlignment="Center" Foreground="#CBD5E1" />
+                                <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding GameDir}" IsEnabled="{Binding IsIdle}" Watermark="%LOCALAPPDATA%\Yu-Gi-Oh! Rogue Duelist\Game" />
+                                <Button Grid.Row="2" Grid.Column="2" Classes="subtle" Content="{Binding Loc.BrowseButton}" Command="{Binding BrowseGameDirCommand}" />
+
+                                <TextBlock Grid.Row="3" Grid.Column="0" Text="{Binding Loc.PicsDirLabel}" VerticalAlignment="Center" Foreground="#CBD5E1" />
+                                <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding PicsDir}" IsEnabled="{Binding IsIdle}" Watermark="{Binding Loc.PicsDirWatermark}" />
+                                <Button Grid.Row="3" Grid.Column="2" Classes="subtle" Content="{Binding Loc.BrowseButton}" Command="{Binding BrowsePicsDirCommand}" />
+
+                                <TextBlock Grid.Row="4" Grid.Column="0" Text="{Binding Loc.RepoLabel}" VerticalAlignment="Center" Foreground="#CBD5E1" />
+                                <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding Repo}" IsEnabled="{Binding IsIdle}" />
+                                <Button Grid.Column="2" Grid.Row="4" Classes="subtle" Content="{Binding Loc.SaveSettingsButton}" Command="{Binding SaveSettingsCommand}" />
+
+                                <StackPanel Grid.Row="5" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="10" Margin="0,6,0,0">
+                                    <Button Classes="primary" Content="{Binding Loc.UpdateGameButton}" Command="{Binding UpdateGameCommand}" />
+                                    <Button Classes="subtle" Content="{Binding Loc.LaunchGameButton}" Command="{Binding LaunchGameCommand}" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <Border Classes="card">
+                            <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="165,*,Auto,Auto" RowSpacing="8" ColumnSpacing="8">
+                                <TextBlock Grid.Row="0" Grid.ColumnSpan="4" Text="{Binding Loc.BuildOnlyDesc}" FontSize="12.5" Foreground="#94A3B8" />
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="{Binding Loc.BuildOnlyDirLabel}" VerticalAlignment="Center" Foreground="#CBD5E1" />
+                                <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding BuildOnlyDir}" IsEnabled="{Binding IsIdle}" />
+                                <Button Grid.Row="1" Grid.Column="2" Classes="subtle" Content="{Binding Loc.BrowseButton}" Command="{Binding BrowseBuildOnlyDirCommand}" />
+                                <Button Grid.Row="1" Grid.Column="3" Classes="subtle" Content="{Binding Loc.ExportBuildOnlyButton}" Command="{Binding ExportBuildOnlyCommand}" />
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+        </TabControl>
+
+        <!-- Row 2: Progress Bar -->
+        <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="10">
+            <StackPanel Grid.Column="0" Spacing="4">
+                <TextBlock Text="{Binding StatusText}" FontSize="12" Foreground="#CBD5E1" TextTrimming="CharacterEllipsis" />
+                <ProgressBar Minimum="0" Maximum="100" Height="6" Value="{Binding ProgressValue}" IsIndeterminate="{Binding IsProgressIndeterminate}" />
+            </StackPanel>
+            <Button Grid.Column="1" Classes="subtle" VerticalAlignment="Center" Content="{Binding Loc.CancelButton}" IsVisible="{Binding IsBusy}" Command="{Binding CancelCommand}" />
+        </Grid>
+
+        <!-- Row 3: Live Console Log -->
+        <Border Grid.Row="3" Classes="card" Padding="10">
+            <Grid RowDefinitions="Auto,*" RowSpacing="6">
+                <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                    <TextBlock Text="{Binding Loc.LogsHeader}" VerticalAlignment="Center" FontSize="12.5" FontWeight="SemiBold" Foreground="#CBD5E1" />
+                    <Button Grid.Column="1" Classes="iconBtn" Content="{Binding Loc.CopyLogsButton}" Command="{Binding CopyLogsCommand}" />
+                    <Button Grid.Column="2" Classes="iconBtn" Content="{Binding Loc.ClearLogsButton}" Command="{Binding ClearLogsCommand}" />
+                </Grid>
+
+                <Border Grid.Row="1" Background="#0D1118" BorderBrush="#232B3D" BorderThickness="1" CornerRadius="6" Padding="8">
+                    <ScrollViewer x:Name="LogScrollViewer" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                        <ItemsControl ItemsSource="{Binding Logs}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:LogItem">
+                                    <SelectableTextBlock FontFamily="Cascadia Mono, Consolas, Microsoft YaHei UI, monospace"
+                                                         FontSize="12" LineHeight="18" Foreground="{Binding Foreground}">
+                                        <Run Text="[" Foreground="#64748B" /><Run Text="{Binding TimeText}" Foreground="#64748B" /><Run Text="] " Foreground="#64748B" />
+                                        <Run Text="{Binding Prefix}" FontWeight="SemiBold" /><Run Text="{Binding Message}" />
+                                    </SelectableTextBlock>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Border>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>
