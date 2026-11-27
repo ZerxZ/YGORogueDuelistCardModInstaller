@@ -211,6 +211,32 @@ public sealed class ModManagerState
     [JsonPropertyName("developerMode")]
     public bool DeveloperMode { get; set; }
 
+    /// <summary>
+    /// When true (default), hides the "Online" multiplayer menu entry whenever MODs / Trainer / Dev Mode are active,
+    /// protecting vanilla multiplayer fun. Pure vanilla runs always show Online normally.
+    /// </summary>
+    [JsonPropertyName("hideOnlineWhenModded")]
+    public bool HideOnlineWhenModded { get; set; } = true;
+
+    /// <summary>
+    /// When true (default), injects the built-in F8 in-game Trainer overlay even outside Developer Mode
+    /// (so players keep Trainer & gameplay helpers without enabling the MOD Editor / Developer Mode).
+    /// </summary>
+    [JsonPropertyName("enableBuiltInTrainer")]
+    public bool EnableBuiltInTrainer { get; set; } = true;
+
+    [JsonPropertyName("customCategories")]
+    public List<string> CustomCategories { get; set; } = [];
+
+    [JsonPropertyName("aiApiBaseUrl")]
+    public string AiApiBaseUrl { get; set; } = string.Empty;
+
+    [JsonPropertyName("aiApiModel")]
+    public string AiApiModel { get; set; } = string.Empty;
+
+    [JsonPropertyName("aiApiKey")]
+    public string AiApiKey { get; set; } = string.Empty;
+
     [JsonPropertyName("installDir")]
     public string? InstallDir { get; set; }
 
@@ -297,6 +323,8 @@ public sealed record ApplyModsOptions
     public bool ForceKillRunningGame { get; init; }
     public bool IgnoreVersionRequirements { get; init; }
     public bool? DeveloperModeOverride { get; init; }
+    public bool? HideOnlineWhenModdedOverride { get; init; }
+    public bool? EnableBuiltInTrainerOverride { get; init; }
     public int? HotReloadPort { get; init; }
 }
 
@@ -309,6 +337,8 @@ public sealed record ModManagerStatusSnapshot(
     LauncherMetadata? LauncherMeta,
     InjectionMode Mode,
     bool DeveloperMode,
+    bool HideOnlineWhenModded,
+    bool EnableBuiltInTrainer,
     InjectionSyncState SyncState,
     string SyncSummary,
     string CurrentFingerprint,

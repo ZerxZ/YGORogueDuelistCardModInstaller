@@ -31,12 +31,16 @@ public static class ModCompositor
         InjectionMode mode,
         string? baseVersion,
         IReadOnlyList<ManagedMod> orderedMods,
-        bool developerMode = false)
+        bool developerMode = false,
+        bool hideOnlineWhenModded = true,
+        bool enableBuiltInTrainer = true)
     {
         var sb = new StringBuilder();
         sb.Append("mode=").Append(mode).Append('\n');
         sb.Append("base=").Append(baseVersion ?? "").Append('\n');
         sb.Append("dev=").Append(developerMode).Append('\n');
+        sb.Append("hideOnline=").Append(hideOnlineWhenModded).Append('\n');
+        sb.Append("trainer=").Append(enableBuiltInTrainer).Append('\n');
         sb.Append("runtime=").Append(ModRuntimeGenerator.RuntimeVersion).Append('\n');
 
         foreach (var mod in orderedMods.Where(m => m.Enabled).OrderBy(m => m.Order))
@@ -70,13 +74,15 @@ public static class ModCompositor
         IInstallerInteraction interaction,
         CancellationToken cancellationToken = default,
         bool developerMode = false,
-        int? hotReloadPort = null)
+        int? hotReloadPort = null,
+        bool hideOnlineWhenModded = true,
+        bool enableBuiltInTrainer = true)
     {
         var enabledMods = orderedMods.Where(m => m.Enabled).OrderBy(m => m.Order).ToList();
         var files = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         var newlyAdded = new HashSet<string>(StringComparer.Ordinal);
 
-        if (enabledMods.Count == 0 && !developerMode && hotReloadPort is null)
+        if (enabledMods.Count == 0 && !developerMode && !enableBuiltInTrainer && hotReloadPort is null)
         {
             return new ComposedModOutput(files, newlyAdded, 0, 0);
         }
@@ -657,7 +663,12 @@ public static class ModCompositor
             interaction.Say("Developer Mode: 已注入内置开发者设置 & 调试模式（F10 调试终端/网络追踪/FPS）、内置修改器（F8）与沙盒自由决斗解锁");
         }
 
-        // Built-in F8 Trainer overlay (auto-enabled in Developer Mode or when any trainer.json sets inGameOverlay: true)
+        // Built-in F8 Trainer overlay (available to regular players when enableBuiltInTrainer is true, or in Developer Mode / trainer.json!)
+        if (enableBuiltInTrainer)
+        {
+            enableBuiltInTrainerOverlay = true;
+        }
+
         if (enableBuiltInTrainerOverlay)
         {
             // Inject real-time Python backend command ('mod-trainer') into mobile_backend.py so F8 Trainer
@@ -868,7 +879,7 @@ public static class ModCompositor
         //    and Tag/Draft room handshakes clearly identify MOD builds and never match vanilla rooms.
         // 2. Prevent modded builds from uploading telemetry/stats/replays to Thronior's official Cloudflare Workers
         //    (*.hadow--un--esktop.workers.dev) while preserving self-hosted custom Worker URLs if configured!
-        if (enabledMods.Count > 0 || developerMode)
+        if (enabledMods.Count > 0 || developerMode || enableBuiltInTrainerOverlay)
         {
             var rawBaseVer = !string.IsNullOrWhiteSpace(baseGameVersion) ? baseGameVersion.Trim() : "0.0.0";
             var moddedVersionTag = rawBaseVer.Contains("-mod", StringComparison.OrdinalIgnoreCase)
@@ -948,7 +959,7 @@ public static class ModCompositor
                 }
             }
 
-            // Show clear visible "[MOD]" marker next to title version so screenshots & players distinguish MOD vs Vanilla instantly
+            // Show clear visible "[MOD]" marker next to title version & optionally hide Online Multiplayer when modded
             if (existingZipEntries.Contains("mobile.js") && !looseOverrides.ContainsKey("mobile.js"))
             {
                 var mobText = files.TryGetValue("mobile.js", out var existingMob)
@@ -959,13 +970,35 @@ public static class ModCompositor
                     "<small class=\"title-version\">v${esc(replayVersion)}</small>",
                     modBadgeHtml,
                     StringComparison.Ordinal);
+
+                if (hideOnlineWhenModded)
+                {
+                    if (patchedMob.Contains("baseMenu.filter(m=>", StringComparison.Ordinal) &&
+                        !patchedMob.Contains("m[4]!=='online'", StringComparison.Ordinal))
+                    {
+                        patchedMob = patchedMob.Replace(
+                            "baseMenu.filter(m=>",
+                            "baseMenu.filter(m=>m[4]!=='online'&&",
+                            StringComparison.Ordinal);
+                    }
+                    if (patchedMob.Contains("if(a==='online'){", StringComparison.Ordinal) &&
+                        !patchedMob.Contains("mod-online-hidden", StringComparison.Ordinal))
+                    {
+                        patchedMob = patchedMob.Replace(
+                            "if(a==='online'){",
+                            "if(a==='online'){/* mod-online-hidden */toast('MOD 模式下已隐藏多人在线联机（可在设置中切换，原版游戏正常显示）');return;",
+                            StringComparison.Ordinal);
+                    }
+                }
+
                 if (!string.Equals(patchedMob, mobText, StringComparison.Ordinal))
                 {
                     files["mobile.js"] = ModPatcher.GetUtf8Bytes(patchedMob);
                 }
             }
 
-            interaction.Say($"MOD 识别标记: 已标记版本为 v{moddedVersionTag}，并自动隔离官方统计/回放/联机房间服务器（防止与原版混淆）");
+            interaction.Say($"MOD 识别标记: 已标记版本为 v{moddedVersionTag}，并自动隔离官方统计/回放服务器" +
+                (hideOnlineWhenModded ? " + 已隐藏多人在线联机入口（保护原版玩家乐趣，可在设置中开关）" : "（多人在线联机入口已按用户设置保留）"));
         }
 
         if (runtimeDescriptors.Count > 0 || hotReloadPort is > 0)

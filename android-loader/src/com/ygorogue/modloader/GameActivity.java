@@ -2,11 +2,16 @@ package com.ygorogue.modloader;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.AtomicFile;
+import android.view.Display;
 import android.view.View;
+import android.view.WindowManager;
 import android.webkit.*;
+import org.json.JSONObject;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -14,19 +19,28 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 /**
- * Full-screen offline game container for Android with Zero-Copy Overlay Serving:
+ * Full-screen offline native Android game container with Zero-Copy Overlay Serving:
  *   1. Serves modded files from filesDir/game/overlay/<path>
  *   2. Falls back directly to entries inside filesDir/game/vanilla-web.zip (zero duplicate disk space!)
- * Provides the exact ShadowNative bridge expected by Yu-Gi-Oh! Rogue Duelist.
+ *   3. Neutralizes web-only PWA chrome (pwa.js / pwa.css / web-boot.js) so web-*.zip runs as a
+ *      100% genuine native Android app with full landscape / orientation & ShadowNative support.
  */
 public final class GameActivity extends Activity {
     private static final String HOST = "appassets.androidplatform.net";
     private static final int PICK_FILE = 4103;
     private static final int SAVE_DECK_IMAGE = 4102;
 
+    private static final String NATIVE_WEB_BOOT_JS = "import './mobile.js';\n";
+    private static final String NATIVE_PWA_JS_STUB = "export {};\n";
+    private static final String NATIVE_PWA_CSS_STUB =
+        "html,body{overscroll-behavior:none}" +
+        ".web-install-menu,#web-app-options,.web-update-ready,#web-app-settings,#web-offline-offer,#web-save-recovery,#web-brave-warning{display:none!important;}\n";
+
     private WebView web;
+    private ModStore store;
     private ZipFile vanillaZip;
     private File overlayDir;
+    private boolean forceVanilla;
     private ValueCallback<Uri[]> pendingFiles;
     private byte[] pendingDeckImage;
 
@@ -38,8 +52,18 @@ public final class GameActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        ModStore store = new ModStore(this);
+        store = new ModStore(this);
         overlayDir = store.getOverlayDir();
+        forceVanilla = getIntent() != null && getIntent().getBooleanExtra("forceVanilla", false);
+
+        // Apply saved orientation preference immediately (supports landscape, portrait, or auto)
+        applyRequestedOrientation(store.loadState().optString("orientation", "auto"));
+
+        if (Build.VERSION.SDK_INT >= 28) {
+            WindowManager.LayoutParams lp = getWindow().getAttributes();
+            lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            getWindow().setAttributes(lp);
+        }
 
         try {
             vanillaZip = new ZipFile(store.getVanillaZip());
@@ -49,11 +73,7 @@ public final class GameActivity extends Activity {
             return;
         }
 
-        getWindow().getDecorView().setSystemUiVisibility(
-            View.SYSTEM_UI_FLAG_FULLSCREEN
-                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        applyImmersiveUi();
 
         web = new WebView(this);
         setContentView(web);
@@ -64,6 +84,11 @@ public final class GameActivity extends Activity {
         s.setDomStorageEnabled(true);
         s.setAllowFileAccess(false);
         s.setAllowContentAccess(false);
+        s.setAllowFileAccessFromFileURLs(false);
+        s.setAllowUniversalAccessFromFileURLs(false);
+        s.setJavaScriptCanOpenWindowsAutomatically(false);
+        s.setSupportMultipleWindows(false);
+        s.setGeolocationEnabled(false);
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
 
@@ -90,7 +115,11 @@ public final class GameActivity extends Activity {
         web.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView w, WebResourceRequest r) {
-                return !(r.isForMainFrame() && bundled(r.getUrl()));
+                if (r.isForMainFrame() && bundled(r.getUrl())) return false;
+                if (r.isForMainFrame() && "https".equals(r.getUrl().getScheme()) && "discord.gg".equals(r.getUrl().getHost())) {
+                    try { startActivity(new Intent(Intent.ACTION_VIEW, r.getUrl())); } catch (Exception ignored) {}
+                }
+                return true;
             }
 
             @Override
@@ -104,6 +133,17 @@ public final class GameActivity extends Activity {
                     }
                     path = path.substring(1);
                     if (path.isEmpty()) path = "index.html";
+
+                    // Keep APK strictly native-app mode (never load Web PWA install banners or SW update loops)
+                    if ("web-boot.js".equals(path)) {
+                        return makeResponse("text/javascript", NATIVE_WEB_BOOT_JS.getBytes(StandardCharsets.UTF_8));
+                    }
+                    if ("pwa.js".equals(path)) {
+                        return makeResponse("text/javascript", NATIVE_PWA_JS_STUB.getBytes(StandardCharsets.UTF_8));
+                    }
+                    if ("pwa.css".equals(path)) {
+                        return makeResponse("text/css", NATIVE_PWA_CSS_STUB.getBytes(StandardCharsets.UTF_8));
+                    }
 
                     InputStream stream = openOverlayOrVanilla(path);
                     if (stream == null) throw new IOException("Not found: " + path);
@@ -122,6 +162,7 @@ public final class GameActivity extends Activity {
 
                     Map<String, String> headers = new HashMap<>();
                     headers.put("X-Content-Type-Options", "nosniff");
+                    headers.put("Referrer-Policy", "no-referrer");
                     headers.put("Cache-Control", "no-store");
                     return new WebResourceResponse(mime, "UTF-8", 200, "OK", headers, stream);
                 } catch (IOException e) {
@@ -134,9 +175,47 @@ public final class GameActivity extends Activity {
         web.loadUrl("https://" + HOST + "/index.html");
     }
 
+    private static WebResourceResponse makeResponse(String mime, byte[] bytes) {
+        Map<String, String> headers = new HashMap<>();
+        headers.put("X-Content-Type-Options", "nosniff");
+        headers.put("Cache-Control", "no-store");
+        return new WebResourceResponse(mime, "UTF-8", 200, "OK", headers, new ByteArrayInputStream(bytes));
+    }
+
+    private void applyImmersiveUi() {
+        getWindow().getDecorView().setSystemUiVisibility(
+            View.SYSTEM_UI_FLAG_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
+    }
+
+    private void applyRequestedOrientation(String mode) {
+        final int o = "portrait".equals(mode)
+            ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+            : "landscape".equals(mode)
+                ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                : ActivityInfo.SCREEN_ORIENTATION_FULL_USER;
+        if (getRequestedOrientation() != o) {
+            setRequestedOrientation(o);
+        }
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            applyImmersiveUi();
+        }
+    }
+
     private InputStream openOverlayOrVanilla(String relPath) throws IOException {
-        File ov = new File(overlayDir, relPath);
-        if (ov.isFile()) return new FileInputStream(ov);
+        if (!forceVanilla) {
+            File ov = new File(overlayDir, relPath);
+            if (ov.isFile()) return new FileInputStream(ov);
+        }
         synchronized (this) {
             if (vanillaZip == null) return null;
             ZipEntry entry = vanillaZip.getEntry(relPath);
@@ -187,6 +266,7 @@ public final class GameActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        applyImmersiveUi();
         if (web != null) {
             web.onResume();
             web.evaluateJavascript("window.resumeAudio && window.resumeAudio()", null);
@@ -256,14 +336,44 @@ public final class GameActivity extends Activity {
 
         @JavascriptInterface
         public void setOrientation(String mode) {
-            final int o = "portrait".equals(mode) ? android.content.pm.ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
-                : "landscape".equals(mode) ? android.content.pm.ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
-                : android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_USER;
-            runOnUiThread(() -> setRequestedOrientation(o));
+            String normalized = "portrait".equals(mode) ? "portrait" : ("landscape".equals(mode) ? "landscape" : "auto");
+            try {
+                JSONObject st = store.loadState();
+                // Only overwrite loader orientation if user explicitly changed it inside game Settings
+                if (!normalized.equals(st.optString("orientation", "auto")) && !"auto".equals(normalized)) {
+                    st.put("orientation", normalized);
+                    store.saveState(st);
+                }
+            } catch (Exception ignored) {}
+            // Respect loader's explicit lock if game passes "auto" on startup
+            String effective = "auto".equals(normalized) ? store.loadState().optString("orientation", "auto") : normalized;
+            runOnUiThread(() -> applyRequestedOrientation(effective));
         }
 
         @JavascriptInterface
-        public void setFrameRateCap(int fps) { /* handled by frame-cap.js */ }
+        public void setFrameRateCap(int fps) {
+            final int cap = Math.max(30, Math.min(120, fps));
+            runOnUiThread(() -> {
+                try {
+                    Display display = getWindow().getDecorView().getDisplay();
+                    if (display == null) return;
+                    Display.Mode current = display.getMode(), best = null, lowest = null;
+                    float fastest = 0;
+                    for (Display.Mode m : display.getSupportedModes()) {
+                        if (m.getPhysicalWidth() != current.getPhysicalWidth() || m.getPhysicalHeight() != current.getPhysicalHeight()) continue;
+                        fastest = Math.max(fastest, m.getRefreshRate());
+                        if (lowest == null || m.getRefreshRate() < lowest.getRefreshRate()) lowest = m;
+                        if (m.getRefreshRate() <= cap + 0.5f && (best == null || m.getRefreshRate() > best.getRefreshRate())) best = m;
+                    }
+                    if (best == null) best = lowest;
+                    WindowManager.LayoutParams params = getWindow().getAttributes();
+                    final int modeId = best == null || fastest <= cap + 0.5f ? 0 : best.getModeId();
+                    if (params.preferredDisplayModeId == modeId) return;
+                    params.preferredDisplayModeId = modeId;
+                    getWindow().setAttributes(params);
+                } catch (RuntimeException ignored) {}
+            });
+        }
 
         @JavascriptInterface
         public boolean saveDeckImage(String name, String base64) {
@@ -284,6 +394,7 @@ public final class GameActivity extends Activity {
         @JavascriptInterface public boolean shareImage(String name, String base64) { return false; }
         @JavascriptInterface public void openUpdate() { runOnUiThread(GameActivity.this::finish); }
         @JavascriptInterface public void openUpdateIn(String lang) { runOnUiThread(GameActivity.this::finish); }
+        @JavascriptInterface public void returnToLoader() { runOnUiThread(GameActivity.this::finish); }
         @JavascriptInterface public void quit() { runOnUiThread(GameActivity.this::finish); }
     }
 }

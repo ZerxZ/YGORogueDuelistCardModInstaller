@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Button, Card, Chip, Input, Label, ListBox, ProgressBar, Select, Surface, TextField } from '@heroui/react';
+import { Button, Card, Chip, Input, Label, ListBox, ProgressBar, Select, Surface, Switch, TextField } from '@heroui/react';
 import {
   Activity,
   Bot,
@@ -328,8 +328,70 @@ export function SettingsApiTab({
 
   return (
     <div className="grid h-full min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto bg-background p-4 lg:grid-cols-12">
-      {/* LEFT COLUMN: Built-in Update Center + Proxy + Vanilla DLL Inspector + Paths */}
+      {/* LEFT COLUMN: Built-in Trainer & Online Guard + Update Center + Proxy + Vanilla DLL Inspector + Paths */}
       <div className="space-y-3 lg:col-span-7">
+        {/* 0. Built-in Trainer, Online Multiplayer Guard & Developer Mode Switches */}
+        <Card variant="default" className="p-4 gap-3">
+          <Card.Header className="p-0">
+            <Card.Title className="flex items-center gap-2 text-sm">
+              <ShieldCheck className="size-4 text-success" />
+              {t.gameplayGuardTitle}
+            </Card.Title>
+          </Card.Header>
+          <Card.Content className="p-0 space-y-2.5">
+            <Switch
+              size="sm"
+              isSelected={status.hideOnlineWhenModded !== false}
+              onChange={async (checked) => {
+                await apiPost('/api/settings', { hideOnlineWhenModded: checked });
+                await onRefresh();
+              }}
+            >
+              <Switch.Content>
+                <Switch.Control><Switch.Thumb /></Switch.Control>
+                <div className="min-w-0">
+                  <span className="block text-xs font-medium text-foreground">{t.hideOnlineSwitchLabel}</span>
+                  <span className="block text-[11px] text-muted">{t.hideOnlineSwitchHint}</span>
+                </div>
+              </Switch.Content>
+            </Switch>
+
+            <Switch
+              size="sm"
+              isSelected={status.enableBuiltInTrainer !== false}
+              onChange={async (checked) => {
+                await apiPost('/api/settings', { enableBuiltInTrainer: checked });
+                await onRefresh();
+              }}
+            >
+              <Switch.Content>
+                <Switch.Control><Switch.Thumb /></Switch.Control>
+                <div className="min-w-0">
+                  <span className="block text-xs font-medium text-foreground">{t.trainerSwitchLabel}</span>
+                  <span className="block text-[11px] text-muted">{t.trainerSwitchHint}</span>
+                </div>
+              </Switch.Content>
+            </Switch>
+
+            <Switch
+              size="sm"
+              isSelected={status.developerMode}
+              onChange={async (checked) => {
+                await apiPost('/api/settings', { developerMode: checked });
+                await onRefresh();
+              }}
+            >
+              <Switch.Content>
+                <Switch.Control><Switch.Thumb /></Switch.Control>
+                <div className="min-w-0">
+                  <span className="block text-xs font-medium text-foreground">{t.devMode}</span>
+                  <span className="block text-[11px] text-muted">{t.devModeSwitchHint}</span>
+                </div>
+              </Switch.Content>
+            </Switch>
+          </Card.Content>
+        </Card>
+
         {/* 1. Built-in Update Center & GitHub Mirror Proxy (with Resumable Downloads!) */}
         <Card variant="default" className="p-4 gap-3">
           <Card.Header className="p-0 flex flex-row items-start justify-between gap-2">

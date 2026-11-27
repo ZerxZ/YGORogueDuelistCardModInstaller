@@ -24,13 +24,19 @@ import {
   Bot,
   CheckCircle2,
   CheckSquare,
+  ChevronDown,
+  ChevronRight,
   Code2,
+  Copy,
   FolderInput,
   FolderOpen,
+  FolderPlus,
   GripVertical,
   ImagePlus,
   Info,
   Layers,
+  ListChecks,
+  ListOrdered,
   Package,
   Palette,
   Pencil,
@@ -41,6 +47,7 @@ import {
   Sliders,
   Sparkles,
   Square,
+  Tag,
   Trash2,
   Upload,
   User,
@@ -49,11 +56,31 @@ import {
 } from 'lucide-react';
 import { apiPost, apiUploadBinary, resolveApiUrl } from '../api';
 import { fmt, type I18nDict } from '../i18n';
-import type { ManagerStatus, ModCategoryKey, ModEntry } from '../types';
+import type { Lang, ManagerStatus, ModCategoryKey, ModEntry } from '../types';
+
+interface OrganizePlanItem {
+  modId: string;
+  modName: string;
+  oldCategory: string;
+  newCategory: string;
+  oldOrder: number;
+  newOrder: number;
+  reason: string;
+}
+
+interface OrganizePlanResp {
+  ok: boolean;
+  applied: boolean;
+  mode: string;
+  summary: string;
+  items: OrganizePlanItem[];
+  suggestedCustomCategories?: string[];
+}
 
 interface ModLibraryTabProps {
   status: ManagerStatus;
   t: I18nDict;
+  lang: Lang;
   selectedModId: string;
   inspectorOpen: boolean;
   onSelectMod: (id: string) => void;
@@ -179,6 +206,7 @@ function summarizeModStats(m: ModEntry, t: I18nDict): string {
 export function ModLibraryTab({
   status,
   t,
+  lang,
   selectedModId,
   inspectorOpen: _inspectorOpen,
   onSelectMod,
@@ -190,18 +218,42 @@ export function ModLibraryTab({
   onCreateExampleMod,
   onNotify,
 }: ModLibraryTabProps) {
+  const isDev = Boolean(status.developerMode);
   const [busyAction, setBusyAction] = useState(false);
-  const [activeCategory, setActiveCategory] = useState<ModCategoryKey>('all');
+  const [activeCategory, setActiveCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [viewMode, setViewMode] = useState<'grouped' | 'flat'>('grouped');
+  const [collapsedCats, setCollapsedCats] = useState<Record<string, boolean>>({});
+
+  // Custom Category Creator
+  const [showAddCat, setShowAddCat] = useState(false);
+  const [newCatName, setNewCatName] = useState('');
+
+  // AI / Smart Organize Modal
+  const [organizeOpen, setOrganizeOpen] = useState(false);
+  const [organizeTab, setOrganizeTab] = useState<'smart' | 'ai'>('smart');
+  const [preserveCustomCats, setPreserveCustomCats] = useState(true);
+  const [aiBaseUrl, setAiBaseUrl] = useState(status.aiApiBaseUrl || 'https://api.deepseek.com/v1');
+  const [aiModel, setAiModel] = useState(status.aiApiModel || 'deepseek-chat');
+  const [aiApiKey, setAiApiKey] = useState(status.hasAiApiKey ? '__KEEP__' : '');
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [organizeBusy, setOrganizeBusy] = useState(false);
+  const [organizePlan, setOrganizePlan] = useState<OrganizePlanResp | null>(null);
 
   // Drag & Drop state (Reorder MODs, Categorize MODs, Drop external .zip / cover image)
   const [draggingModId, setDraggingModId] = useState<string | null>(null);
   const [dropTargetModId, setDropTargetModId] = useState<string | null>(null);
   const [dropPosition, setDropPosition] = useState<'before' | 'after'>('before');
-  const [dropTargetCategory, setDropTargetCategory] = useState<ModCategoryKey | null>(null);
+  const [dropTargetCategory, setDropTargetCategory] = useState<string | null>(null);
   const [isDraggingExternalFile, setIsDraggingExternalFile] = useState(false);
   const [coverDropHover, setCoverDropHover] = useState(false);
   const externalDragDepthRef = useRef(0);
+
+  useEffect(() => {
+    if (status.aiApiBaseUrl) setAiBaseUrl(status.aiApiBaseUrl);
+    if (status.aiApiModel) setAiModel(status.aiApiModel);
+    if (status.hasAiApiKey && !aiApiKey) setAiApiKey('__KEEP__');
+  }, [status.aiApiBaseUrl, status.aiApiModel, status.hasAiApiKey]);
 
   // Modal Window Detail / Metadata Editor (replaces cramped right sidebar!)
   const [detailModalOpen, setDetailModalOpen] = useState(false);
@@ -237,11 +289,33 @@ export function ModLibraryTab({
     setEditingMeta(false);
   }, [selectedMod?.id, selectedMod?.name, selectedMod?.category, selectedMod?.coverUrl, selectedMod?.autoDiscoverEntries]);
 
+  const allCategorySlugs = useMemo(() => {
+    const list: string[] = [...MOD_CATEGORY_LIST];
+    const seen = new Set(list.map((c) => c.toLowerCase()));
+    for (const c of status.customCategories ?? []) {
+      const clean = c.trim();
+      if (clean && !seen.has(clean.toLowerCase())) {
+        seen.add(clean.toLowerCase());
+        list.push(clean);
+      }
+    }
+    for (const m of status.mods) {
+      const eff = (m.effectiveCategory || 'other').trim();
+      if (eff && !seen.has(eff.toLowerCase())) {
+        seen.add(eff.toLowerCase());
+        list.push(eff);
+      }
+    }
+    return list;
+  }, [status.customCategories, status.mods]);
+
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = { all: status.mods.length };
     for (const m of status.mods) {
-      const cat = (m.effectiveCategory || 'other').toLowerCase();
+      const cat = (m.effectiveCategory || 'other').trim();
       counts[cat] = (counts[cat] ?? 0) + 1;
+      const lower = cat.toLowerCase();
+      if (lower !== cat) counts[lower] = (counts[lower] ?? 0) + 1;
     }
     return counts;
   }, [status.mods]);
@@ -249,19 +323,30 @@ export function ModLibraryTab({
   const filteredMods = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return status.mods.filter((m) => {
-      const eff = (m.effectiveCategory || 'other').toLowerCase();
-      if (activeCategory !== 'all' && eff !== activeCategory) return false;
+      const eff = (m.effectiveCategory || 'other').trim();
+      if (activeCategory !== 'all' && eff.toLowerCase() !== activeCategory.toLowerCase()) return false;
       if (!q) return true;
       return (
         m.name.toLowerCase().includes(q) ||
         m.id.toLowerCase().includes(q) ||
         (m.author || '').toLowerCase().includes(q) ||
         (m.description || '').toLowerCase().includes(q) ||
-        eff.includes(q) ||
+        eff.toLowerCase().includes(q) ||
+        getModCategoryLabel(eff, t).toLowerCase().includes(q) ||
         (m.tags ?? []).some((tag) => tag.toLowerCase().includes(q))
       );
     });
-  }, [status.mods, activeCategory, searchQuery]);
+  }, [status.mods, activeCategory, searchQuery, t]);
+
+  const groupedChecklist = useMemo(() => {
+    const map = new Map<string, ModEntry[]>();
+    for (const m of filteredMods) {
+      const cat = (m.effectiveCategory || 'other').trim();
+      if (!map.has(cat)) map.set(cat, []);
+      map.get(cat)!.push(m);
+    }
+    return Array.from(map.entries());
+  }, [filteredMods]);
 
   const conflictModIds = useMemo(() => {
     const set = new Set<string>();
@@ -591,7 +676,7 @@ export function ModLibraryTab({
     handleReorderByIds(ids);
   };
 
-  const handleCategoryChipDrop = (e: React.DragEvent, cat: ModCategoryKey) => {
+  const handleCategoryChipDrop = (e: React.DragEvent, cat: string) => {
     e.preventDefault();
     e.stopPropagation();
     setDropTargetCategory(null);
@@ -612,6 +697,93 @@ export function ModLibraryTab({
         'ok',
       );
     });
+  };
+
+  const handleToggleCategory = (cat: string, enabled: boolean) =>
+    runAction(async () => {
+      await apiPost('/api/mods/toggle-category', { category: cat, enabled });
+    });
+
+  const handleQuickChangeCategory = (mod: ModEntry, cat: string) =>
+    runAction(async () => {
+      await apiPost('/api/mods/metadata', { modId: mod.id, category: cat });
+      onNotify(fmt(t.toastCategoryMoved, { name: mod.name, cat: getModCategoryLabel(cat, t) }), 'ok');
+    });
+
+  const handleAddCustomCategory = () => {
+    const clean = newCatName.trim();
+    if (!clean) return;
+    runAction(async () => {
+      await apiPost('/api/mods/categories', { action: 'add', name: clean });
+      setNewCatName('');
+      setShowAddCat(false);
+      onNotify(fmt(t.toastCategoryAdded, { name: clean }), 'ok');
+    });
+  };
+
+  const handlePreviewOrganize = async (mode: 'smart' | 'ai') => {
+    setOrganizeBusy(true);
+    try {
+      const payload =
+        mode === 'ai'
+          ? {
+              mode: 'ai',
+              apply: false,
+              apiBaseUrl: aiBaseUrl,
+              model: aiModel,
+              apiKey: aiApiKey,
+              userPrompt: aiPrompt,
+              saveAiConfig: true,
+            }
+          : {
+              mode: 'smart',
+              apply: false,
+              preserveCustom: preserveCustomCats,
+            };
+      const res = await apiPost<OrganizePlanResp>('/api/mods/organize', payload);
+      setOrganizePlan(res);
+    } catch (e) {
+      onNotify((e as Error).message, 'err');
+    } finally {
+      setOrganizeBusy(false);
+    }
+  };
+
+  const handleApplyOrganizePlan = async () => {
+    if (!organizePlan || organizePlan.items.length === 0) return;
+    setOrganizeBusy(true);
+    try {
+      await apiPost('/api/mods/organize', {
+        applyItems: organizePlan.items.map((it) => ({
+          modId: it.modId,
+          category: it.newCategory,
+          reason: it.reason,
+        })),
+      });
+      await onRefresh();
+      setOrganizeOpen(false);
+      setOrganizePlan(null);
+      onNotify(t.toastOrganizeApplied, 'ok');
+    } catch (e) {
+      onNotify((e as Error).message, 'err');
+    } finally {
+      setOrganizeBusy(false);
+    }
+  };
+
+  const handleCopyOrganizeMcpPrompt = () => {
+    const modSummary = status.mods
+      .map(
+        (m, i) =>
+          `${i + 1}. id="${m.id}" name="${m.name}" category="${m.effectiveCategory}" enabled=${m.enabled} stats=(cards:${m.stats.cardCount}, chars:${m.stats.characterCount}, relics:${m.stats.relicCount}, packs:${m.stats.packCount}, lua:${m.stats.scriptCount}, js:${m.stats.jsPluginCount}, css:${m.stats.cssStyleCount}, trainer:${m.stats.hasTrainer})`,
+      )
+      .join('\n');
+    const prompt =
+      lang === 'zh'
+        ? `请帮我整理《Yu-Gi-Oh! Rogue Duelist》的 MOD 清单列表（分类 + 加载顺序），如果已连接 MCP (${status.mcpUrl}) 请直接调用 organize_mods 工具应用：\n\n当前 MOD 列表：\n${modSummary}\n\n要求：基础大型规则/综合包在前，卡牌/卡包/角色/遗物在中，脚本与美化在后，修改器放最后。你可以根据主题创建清晰的中文分类名。${aiPrompt ? `\n补充要求：${aiPrompt}` : ''}`
+        : `Please organize my Yu-Gi-Oh! Rogue Duelist MOD checklist (categories + load order). If connected via MCP (${status.mcpUrl}), call the organize_mods tool directly:\n\nCurrent MODs:\n${modSummary}\n\nGoal: Overhauls/rules first, cards/packs/characters/relics in middle, scripts/UI themes next, trainers last.${aiPrompt ? `\nExtra preference: ${aiPrompt}` : ''}`;
+    navigator.clipboard.writeText(prompt).catch(() => {});
+    onNotify(t.toastAiSuperPromptCopied, 'ok');
   };
 
   const handleCoverBannerDrop = (e: React.DragEvent, mod: ModEntry) => {
@@ -645,29 +817,37 @@ export function ModLibraryTab({
 
       {/* Center Pane */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Responsive Wrapping Toolbar (never clips action buttons even on narrow windows!) */}
+        {/* Responsive Wrapping Toolbar (Player Mode hides MOD Editor actions; keeps Import, Pack, Organize & Checklist!) */}
         <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-1.5 border-b border-border bg-background px-3 py-1.5">
-          <Button size="sm" variant="primary" onPress={onOpenNewModModal} className="h-7 shrink-0 text-xs">
-            <Plus className="size-3.5" />
-            {t.newMod}
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            isDisabled={busyAction}
-            onPress={() => runAction(onCreateExampleMod)}
-            className="h-7 shrink-0 text-xs"
-          >
-            <Sparkles className="size-3.5 text-warning" />
-            {t.createExampleMod}
-          </Button>
-          <Button size="sm" variant="secondary" isDisabled={busyAction} onPress={handleImportZip} className="h-7 shrink-0 text-xs">
-            <Upload className="size-3.5 text-accent" />
+          <Button size="sm" variant="primary" isDisabled={busyAction} onPress={handleImportZip} className="h-7 shrink-0 text-xs">
+            <Upload className="size-3.5" />
             {t.importZip}
           </Button>
           <Button size="sm" variant="secondary" isDisabled={busyAction} onPress={handleImportFolder} className="h-7 shrink-0 text-xs">
             <FolderInput className="size-3.5 text-accent" />
             {t.importFolder}
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            isDisabled={busyAction || status.mods.length === 0}
+            onPress={() => {
+              setOrganizePlan(null);
+              setOrganizeOpen(true);
+            }}
+            className="h-7 shrink-0 text-xs"
+          >
+            <Sparkles className="size-3.5 text-warning" />
+            {t.aiOrganizeBtn}
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            onPress={() => setShowAddCat((v) => !v)}
+            className="h-7 shrink-0 text-xs"
+          >
+            <FolderPlus className="size-3.5 text-accent" />
+            {t.addCategoryBtn}
           </Button>
           <Button
             size="sm"
@@ -679,24 +859,43 @@ export function ModLibraryTab({
             <Archive className="size-3.5 text-warning" />
             {t.packWorkspace}
           </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onPress={onOpenModGuide}
-            className="h-7 shrink-0 text-xs text-accent hover:bg-accent/10"
-          >
-            <BookOpen className="size-3.5" />
-            {t.modGuideBtn}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onPress={onCopyAiPrompt}
-            className="h-7 shrink-0 text-xs text-warning hover:bg-warning/10"
-          >
-            <Bot className="size-3.5" />
-            {t.copyAiSuperPromptBtn}
-          </Button>
+          {isDev && (
+            <>
+              <Separator orientation="vertical" className="mx-0.5 h-4" />
+              <Button size="sm" variant="secondary" onPress={onOpenNewModModal} className="h-7 shrink-0 text-xs">
+                <Plus className="size-3.5 text-accent" />
+                {t.newMod}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                isDisabled={busyAction}
+                onPress={() => runAction(onCreateExampleMod)}
+                className="h-7 shrink-0 text-xs text-warning"
+              >
+                <Sparkles className="size-3.5" />
+                {t.createExampleMod}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onPress={onOpenModGuide}
+                className="h-7 shrink-0 text-xs text-accent hover:bg-accent/10"
+              >
+                <BookOpen className="size-3.5" />
+                {t.modGuideBtn}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onPress={onCopyAiPrompt}
+                className="h-7 shrink-0 text-xs text-warning hover:bg-warning/10"
+              >
+                <Bot className="size-3.5" />
+                {t.copyAiSuperPromptBtn}
+              </Button>
+            </>
+          )}
           <Button
             size="sm"
             variant="ghost"
@@ -707,8 +906,26 @@ export function ModLibraryTab({
             {t.openModsDir}
           </Button>
 
-          <Separator orientation="vertical" className="mx-1 h-4" />
+          <Separator orientation="vertical" className="mx-0.5 h-4" />
 
+          <Button
+            size="sm"
+            variant={viewMode === 'grouped' ? 'secondary' : 'ghost'}
+            onPress={() => setViewMode(viewMode === 'grouped' ? 'flat' : 'grouped')}
+            className="h-7 shrink-0 text-xs"
+          >
+            {viewMode === 'grouped' ? (
+              <>
+                <ListChecks className="size-3.5 text-accent" />
+                {t.checklistViewGrouped}
+              </>
+            ) : (
+              <>
+                <ListOrdered className="size-3.5 text-warning" />
+                {t.checklistViewFlat}
+              </>
+            )}
+          </Button>
           <Button size="sm" variant="ghost" isDisabled={busyAction} onPress={() => handleToggle('all', true)} className="h-7 shrink-0 text-xs">
             <CheckSquare className="size-3.5 text-success" />
             {t.enableAll}
@@ -722,15 +939,39 @@ export function ModLibraryTab({
           </Button>
         </div>
 
-        {/* Category Filter & Search Strip (supports Drag MOD onto Category Chip!) */}
+        {/* Inline Quick Add Custom Category Bar */}
+        {showAddCat && (
+          <div className="flex shrink-0 items-center gap-2 border-b border-border/80 bg-accent-soft/15 px-3 py-1.5">
+            <Tag className="size-3.5 text-accent shrink-0" />
+            <input
+              type="text"
+              value={newCatName}
+              onChange={(e) => setNewCatName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleAddCustomCategory();
+              }}
+              placeholder={t.aiOrganizeCustomCatPlaceholder}
+              className="h-7 flex-1 rounded-lg border border-border bg-background px-2.5 text-xs text-foreground focus:border-accent focus:outline-none"
+            />
+            <Button size="sm" variant="primary" isDisabled={!newCatName.trim() || busyAction} onPress={handleAddCustomCategory} className="h-7 text-xs">
+              {t.confirm}
+            </Button>
+            <Button size="sm" variant="ghost" onPress={() => setShowAddCat(false)} className="h-7 text-xs">
+              {t.cancel}
+            </Button>
+          </div>
+        )}
+
+        {/* Category Filter & Search Strip (supports Drag MOD onto any Standard or Custom Category Chip!) */}
         <div className="shrink-0 space-y-2 border-b border-border/80 bg-surface/35 px-3 py-2">
           <div className="flex flex-wrap items-center gap-1.5">
-            {MOD_CATEGORY_LIST.map((cat) => {
-              const count = categoryCounts[cat] ?? 0;
-              if (cat !== 'all' && count === 0 && !draggingModId && activeCategory !== cat) {
+            {allCategorySlugs.map((cat) => {
+              const count = categoryCounts[cat] ?? categoryCounts[cat.toLowerCase()] ?? 0;
+              const isCustom = !MOD_CATEGORY_LIST.includes(cat as ModCategoryKey);
+              if (cat !== 'all' && !isCustom && count === 0 && !draggingModId && activeCategory !== cat) {
                 return null;
               }
-              const isActive = activeCategory === cat;
+              const isActive = activeCategory.toLowerCase() === cat.toLowerCase();
               const isDropHover = dropTargetCategory === cat && cat !== 'all';
               return (
                 <button
@@ -755,7 +996,7 @@ export function ModLibraryTab({
                         : 'border-border/70 bg-surface text-muted hover:border-border hover:text-foreground'
                   }`}
                 >
-                  {cat !== 'all' && getCategoryIcon(cat)}
+                  {cat !== 'all' && (isCustom ? <Tag className="size-3" /> : getCategoryIcon(cat))}
                   <span>{getModCategoryLabel(cat, t)}</span>
                   <span className="font-mono text-[10px] opacity-75">{count}</span>
                 </button>
@@ -798,7 +1039,7 @@ export function ModLibraryTab({
               <Package className="mb-3 size-9 text-muted/35" />
               <p className="text-sm font-semibold text-foreground">{t.noModsTitle}</p>
               <p className="mt-1 text-xs text-muted">{t.noModsHint}</p>
-              {status.mods.length === 0 && (
+              {status.mods.length === 0 && isDev && (
                 <Button
                   size="sm"
                   variant="secondary"
@@ -810,8 +1051,8 @@ export function ModLibraryTab({
                 </Button>
               )}
             </div>
-          ) : (
-            filteredMods.map((mod) => {
+          ) : (() => {
+            const renderModChecklistRow = (mod: ModEntry) => {
               const globalIdx = status.mods.findIndex((m) => m.id === mod.id);
               const isSelected = selectedMod?.id === mod.id;
               const hasConflict = conflictModIds.has(mod.id.toLowerCase());
@@ -841,6 +1082,8 @@ export function ModLibraryTab({
                   }}
                   className={`group relative flex cursor-pointer items-center gap-2.5 rounded-xl border px-2.5 py-2 transition-all ${
                     isDragging ? 'opacity-45 scale-[0.99]' : ''
+                  } ${
+                    !mod.enabled ? 'opacity-65' : ''
                   } ${
                     isSelected
                       ? 'border-accent/80 bg-accent-soft/40'
@@ -881,8 +1124,8 @@ export function ModLibraryTab({
                     #{globalIdx + 1}
                   </span>
 
-                  {/* 44x44 Cover Art Thumbnail */}
-                  <div className="relative size-11 shrink-0 overflow-hidden rounded-lg border border-border/80 bg-surface-secondary flex items-center justify-center">
+                  {/* 40x40 Cover Art Thumbnail */}
+                  <div className="relative size-10 shrink-0 overflow-hidden rounded-lg border border-border/80 bg-surface-secondary flex items-center justify-center">
                     {mod.coverUrl ? (
                       <img
                         src={resolveApiUrl(mod.coverUrl)}
@@ -902,24 +1145,27 @@ export function ModLibraryTab({
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="truncate text-[13px] font-semibold text-foreground">{mod.name}</span>
                       <span className="font-mono text-[11px] text-muted">v{mod.version}</span>
-                      <Chip size="sm" color={getCategoryAccent(cat)} variant="soft" className="h-4">
-                        <Chip.Label className="text-[10px]">{getModCategoryLabel(cat, t)}</Chip.Label>
-                      </Chip>
+                      {/* Inline Quick Category Switcher */}
+                      <select
+                        aria-label={t.modCategoryLabel}
+                        value={cat}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => handleQuickChangeCategory(mod, e.target.value)}
+                        className="h-5 max-w-[140px] cursor-pointer rounded-md border border-border/70 bg-surface-secondary px-1.5 text-[10px] font-medium text-foreground/90 focus:border-accent focus:outline-none"
+                      >
+                        {allCategorySlugs
+                          .filter((c) => c !== 'all')
+                          .map((c) => (
+                            <option key={c} value={c}>
+                              {getModCategoryLabel(c, t)}
+                            </option>
+                          ))}
+                      </select>
                       {mod.settingsCount > 0 && (
                         <Chip size="sm" color="success" variant="soft" className="h-4">
                           <Chip.Label className="text-[10px]">
                             F9 · {fmt(t.badgeSettings, { n: mod.settingsCount })}
                           </Chip.Label>
-                        </Chip>
-                      )}
-                      {mod.stats.hasLuaDsl && (
-                        <Chip size="sm" color="accent" variant="soft" className="h-4">
-                          Lua DSL
-                        </Chip>
-                      )}
-                      {mod.stats.hasJsDsl && (
-                        <Chip size="sm" color="warning" variant="soft" className="h-4">
-                          JS DSL
                         </Chip>
                       )}
                       {hasConflict && (
@@ -953,15 +1199,17 @@ export function ModLibraryTab({
                       <Info className="size-3 text-accent" />
                       <span className="hidden sm:inline">{t.editMetadata}</span>
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onPress={() => onOpenInStudio(mod.id)}
-                      className="h-7 px-2 text-[11px]"
-                    >
-                      <Palette className="size-3 text-accent" />
-                      <span className="hidden md:inline">{t.editInStudio}</span>
-                    </Button>
+                    {isDev && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onPress={() => onOpenInStudio(mod.id)}
+                        className="h-7 px-2 text-[11px]"
+                      >
+                        <Palette className="size-3 text-accent" />
+                        <span className="hidden md:inline">{t.editInStudio}</span>
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       variant="secondary"
@@ -1008,8 +1256,91 @@ export function ModLibraryTab({
                   </div>
                 </div>
               );
-            })
-          )}
+            };
+
+            if (viewMode === 'flat') {
+              return <div className="space-y-1.5">{filteredMods.map(renderModChecklistRow)}</div>;
+            }
+
+            return (
+              <div className="space-y-3">
+                {groupedChecklist.map(([cat, items]) => {
+                  const enabledInCat = items.filter((x) => x.enabled).length;
+                  const allEnabledInCat = enabledInCat === items.length && items.length > 0;
+                  const isCollapsed = Boolean(collapsedCats[cat]);
+                  const isCatHover = dropTargetCategory === cat;
+                  const isCustom = !MOD_CATEGORY_LIST.includes(cat as ModCategoryKey);
+
+                  return (
+                    <div
+                      key={cat}
+                      onDragOver={(e) => {
+                        if (!draggingModId) return;
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = 'move';
+                        setDropTargetCategory(cat);
+                      }}
+                      onDragLeave={() => {
+                        if (dropTargetCategory === cat) setDropTargetCategory(null);
+                      }}
+                      onDrop={(e) => handleCategoryChipDrop(e, cat)}
+                      className={`overflow-hidden rounded-xl border transition-all ${
+                        isCatHover
+                          ? 'border-warning bg-warning/10 ring-1 ring-warning/60'
+                          : 'border-border/80 bg-surface/40'
+                      }`}
+                    >
+                      <div
+                        onClick={() => setCollapsedCats((prev) => ({ ...prev, [cat]: !prev[cat] }))}
+                        className="flex cursor-pointer items-center justify-between gap-2 border-b border-border/60 bg-surface-secondary/60 px-3 py-2 select-none hover:bg-surface-secondary"
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          <div onClick={(e) => e.stopPropagation()}>
+                            <Checkbox
+                              aria-label={`Toggle category ${cat}`}
+                              isSelected={allEnabledInCat}
+                              isIndeterminate={enabledInCat > 0 && enabledInCat < items.length}
+                              onChange={(checked) => handleToggleCategory(cat, checked)}
+                            >
+                              <Checkbox.Content>
+                                <Checkbox.Control>
+                                  <Checkbox.Indicator />
+                                </Checkbox.Control>
+                              </Checkbox.Content>
+                            </Checkbox>
+                          </div>
+                          {isCollapsed ? (
+                            <ChevronRight className="size-3.5 text-muted" />
+                          ) : (
+                            <ChevronDown className="size-3.5 text-muted" />
+                          )}
+                          <span className="text-accent">
+                            {isCustom ? <Tag className="size-3.5" /> : getCategoryIcon(cat)}
+                          </span>
+                          <span className="truncate text-xs font-bold text-foreground">
+                            {getModCategoryLabel(cat, t)}
+                          </span>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <Chip size="sm" color={enabledInCat > 0 ? 'accent' : 'default'} variant="soft" className="h-5">
+                            <Chip.Label className="font-mono text-[10px]">
+                              {enabledInCat} / {items.length}
+                            </Chip.Label>
+                          </Chip>
+                        </div>
+                      </div>
+
+                      {!isCollapsed && (
+                        <div className="space-y-1.5 p-2">
+                          {items.map(renderModChecklistRow)}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
 
           {/* Compact Conflict & Version Status Footer inside Main Full-Width List */}
           {(status.versionIssues.length > 0 || status.conflicts.length > 0) && (
@@ -1172,23 +1503,25 @@ export function ModLibraryTab({
                       </Surface>
 
                       <div className="grid grid-cols-2 gap-2">
-                        <Button
-                          size="sm"
-                          variant="primary"
-                          onPress={() => {
-                            setDetailModalOpen(false);
-                            onOpenInStudio(selectedMod.id);
-                          }}
-                          className="h-8 text-xs"
-                        >
-                          <Palette className="size-3.5" />
-                          {t.editInStudio}
-                        </Button>
+                        {isDev && (
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            onPress={() => {
+                              setDetailModalOpen(false);
+                              onOpenInStudio(selectedMod.id);
+                            }}
+                            className="h-8 text-xs"
+                          >
+                            <Palette className="size-3.5" />
+                            {t.editInStudio}
+                          </Button>
+                        )}
                         <Button
                           size="sm"
                           variant="secondary"
                           onPress={() => apiPost('/api/shell/open-folder', { path: selectedMod.directoryPath })}
-                          className="h-8 text-xs"
+                          className={`h-8 text-xs ${!isDev ? 'col-span-2' : ''}`}
                         >
                           <FolderOpen className="size-3.5" />
                           {t.openFolder}
@@ -1281,7 +1614,7 @@ export function ModLibraryTab({
                                         {t.modCatAuto}
                                         <ListBox.ItemIndicator />
                                       </ListBox.Item>
-                                      {MOD_CATEGORY_LIST.filter((c) => c !== 'all').map((cat) => (
+                                      {allCategorySlugs.filter((c) => c !== 'all').map((cat) => (
                                         <ListBox.Item key={cat} id={cat} textValue={getModCategoryLabel(cat, t)}>
                                           {getModCategoryLabel(cat, t)}
                                           <ListBox.ItemIndicator />
@@ -1478,6 +1811,164 @@ export function ModLibraryTab({
                 </Modal.Footer>
               </>
             )}
+          </Modal.Dialog>
+        </Modal.Container>
+      </Modal.Backdrop>
+
+      {/* AI & SMART MOD CHECKLIST ORGANIZER MODAL */}
+      <Modal.Backdrop isOpen={organizeOpen} onOpenChange={setOrganizeOpen}>
+        <Modal.Container placement="center" size="lg">
+          <Modal.Dialog className="sm:max-w-[780px] max-h-[86vh] flex flex-col">
+            <Modal.CloseTrigger />
+            <Modal.Header>
+              <Modal.Icon className="bg-warning/15 text-warning">
+                <Sparkles className="size-5" />
+              </Modal.Icon>
+              <Modal.Heading>{t.aiOrganizeTitle}</Modal.Heading>
+            </Modal.Header>
+
+            <Modal.Body className="min-h-0 flex-1 overflow-y-auto space-y-3 py-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  variant={organizeTab === 'smart' ? 'primary' : 'secondary'}
+                  onPress={() => setOrganizeTab('smart')}
+                  className="h-8 text-xs"
+                >
+                  <Sparkles className="size-3.5" />
+                  {t.aiOrganizeSmartTab}
+                </Button>
+                <Button
+                  size="sm"
+                  variant={organizeTab === 'ai' ? 'primary' : 'secondary'}
+                  onPress={() => setOrganizeTab('ai')}
+                  className="h-8 text-xs"
+                >
+                  <Bot className="size-3.5" />
+                  {t.aiOrganizeLlmTab}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onPress={handleCopyOrganizeMcpPrompt}
+                  className="ml-auto h-8 text-xs text-accent"
+                >
+                  <Copy className="size-3.5" />
+                  {t.aiOrganizeCopyMcpBtn}
+                </Button>
+              </div>
+
+              {organizeTab === 'smart' ? (
+                <Card variant="default" className="p-3.5 space-y-3">
+                  <p className="text-xs leading-relaxed text-muted">
+                    {lang === 'zh'
+                      ? '本地智能规则引擎会分析每个 MOD 的卡牌、Lua、遗物、角色、UI 样式与修改器内容，自动归类并按最佳层级排好加载顺序（大型综合 → 卡牌 → 卡包卡组 → 角色 → 遗物 → 脚本 → 界面美化 → 修改器）。无需 API Key！'
+                      : 'The local smart rule engine analyzes every MOD’s content and sorts them into clean categories and optimal load order (Overhaul → Cards → Packs/Decks → Characters → Relics → Scripts → UI → Trainer). Zero API key needed!'}
+                  </p>
+                  <Switch size="sm" isSelected={preserveCustomCats} onChange={setPreserveCustomCats}>
+                    <Switch.Content>
+                      <Switch.Control><Switch.Thumb /></Switch.Control>
+                      <span className="text-xs text-foreground">
+                        {lang === 'zh' ? '保留我手动创建的自定义分类名称' : 'Preserve my custom category names'}
+                      </span>
+                    </Switch.Content>
+                  </Switch>
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    isDisabled={organizeBusy}
+                    onPress={() => handlePreviewOrganize('smart')}
+                    className="h-8 text-xs"
+                  >
+                    <Sparkles className="size-3.5" />
+                    {t.aiOrganizePreviewBtn}
+                  </Button>
+                </Card>
+              ) : (
+                <Card variant="default" className="p-3.5 space-y-2.5">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <TextField fullWidth variant="secondary" value={aiBaseUrl} onChange={setAiBaseUrl}>
+                      <Label className="text-[11px]">OpenAI 兼容接口 (Base URL)</Label>
+                      <Input className="h-8 font-mono text-xs" placeholder="https://api.deepseek.com/v1" />
+                    </TextField>
+                    <TextField fullWidth variant="secondary" value={aiModel} onChange={setAiModel}>
+                      <Label className="text-[11px]">Model</Label>
+                      <Input className="h-8 font-mono text-xs" placeholder="deepseek-chat / gpt-4o-mini / qwen2.5" />
+                    </TextField>
+                  </div>
+                  <TextField fullWidth variant="secondary" value={aiApiKey} onChange={setAiApiKey}>
+                    <Label className="text-[11px]">API Key（本地 Ollama 可留空）</Label>
+                    <Input type="password" className="h-8 font-mono text-xs" placeholder="sk-..." />
+                  </TextField>
+                  <TextField fullWidth variant="secondary" value={aiPrompt} onChange={setAiPrompt}>
+                    <Label className="text-[11px]">{lang === 'zh' ? '整理偏好（可选）' : 'Custom Preference (Optional)'}</Label>
+                    <TextArea rows={2} className="text-xs" placeholder={t.aiOrganizePromptPlaceholder} />
+                  </TextField>
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    isDisabled={organizeBusy}
+                    onPress={() => handlePreviewOrganize('ai')}
+                    className="h-8 text-xs"
+                  >
+                    <Bot className="size-3.5" />
+                    {organizeBusy ? (lang === 'zh' ? 'AI 正在思考整理方案...' : 'AI organizing...') : t.aiOrganizePreviewBtn}
+                  </Button>
+                </Card>
+              )}
+
+              {organizePlan && (
+                <Card variant="default" className="p-3 space-y-2 border-accent/50">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-accent">{organizePlan.summary}</span>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto space-y-1.5 pr-1">
+                    {organizePlan.items.map((it) => {
+                      const catChanged = it.oldCategory.toLowerCase() !== it.newCategory.toLowerCase();
+                      const orderChanged = it.oldOrder !== it.newOrder;
+                      return (
+                        <div
+                          key={it.modId}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-background px-2.5 py-1.5 text-xs"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className={`font-mono text-[11px] ${orderChanged ? 'text-warning font-bold' : 'text-muted'}`}>
+                                #{it.oldOrder + 1} → #{it.newOrder + 1}
+                              </span>
+                              <span className="font-semibold text-foreground">{it.modName}</span>
+                              <Chip size="sm" color={catChanged ? 'accent' : 'default'} variant="soft" className="h-4">
+                                <Chip.Label className="text-[10px]">
+                                  {catChanged
+                                    ? `${getModCategoryLabel(it.oldCategory, t)} → ${getModCategoryLabel(it.newCategory, t)}`
+                                    : getModCategoryLabel(it.newCategory, t)}
+                                </Chip.Label>
+                              </Chip>
+                            </div>
+                            <p className="mt-0.5 text-[11px] text-muted">{it.reason}</p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </Card>
+              )}
+            </Modal.Body>
+
+            <Modal.Footer className="flex items-center justify-end gap-2 pt-2">
+              <Button size="sm" variant="secondary" onPress={() => setOrganizeOpen(false)}>
+                {t.cancel}
+              </Button>
+              <Button
+                size="sm"
+                variant="primary"
+                isDisabled={!organizePlan || organizeBusy}
+                onPress={handleApplyOrganizePlan}
+              >
+                <CheckCircle2 className="size-3.5" />
+                {t.aiOrganizeApplyBtn}
+              </Button>
+            </Modal.Footer>
           </Modal.Dialog>
         </Modal.Container>
       </Modal.Backdrop>

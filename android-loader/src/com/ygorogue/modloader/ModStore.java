@@ -16,11 +16,16 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 /**
- * Lightweight on-device MOD & web-*.zip storage for the Android Import-Only MOD Loader APK.
+ * On-device MOD, Categorized Checklist, Built-in Trainer config, and web-*.zip storage for Android.
  * Zero external dependencies — pure Android SDK + built-in SQLite for .ypk (.cdb) imports!
  */
 public final class ModStore {
     public static final String DEFAULT_REPO = "Thronior/ygo-rogue-duelist";
+
+    private static final List<String> CATEGORY_LOAD_PRIORITY = Arrays.asList(
+        "overhaul", "cards", "packs_decks", "characters", "relics",
+        "script_plugin", "ui_theme", "trainer", "other"
+    );
 
     private final Context ctx;
     private final File gameDir;
@@ -50,21 +55,36 @@ public final class ModStore {
     public File getModsDir() { return modsDir; }
 
     public synchronized JSONObject loadState() {
+        JSONObject st = null;
         try {
             if (stateFile.isFile()) {
-                return new JSONObject(readUtf8(stateFile));
+                st = new JSONObject(readUtf8(stateFile));
             }
         } catch (Exception ignored) {}
-        JSONObject def = new JSONObject();
+        if (st == null) st = new JSONObject();
         try {
-            def.put("lang", "zh");
-            def.put("githubProxy", "");
-            def.put("vanillaVersion", "");
-            def.put("applied", false);
-            def.put("appliedCount", 0);
-            def.put("mods", new JSONArray());
+            if (!st.has("lang")) st.put("lang", "zh");
+            if (!st.has("githubProxy")) st.put("githubProxy", "");
+            if (!st.has("vanillaVersion")) st.put("vanillaVersion", "");
+            if (!st.has("orientation")) st.put("orientation", "auto");
+            if (!st.has("hideOnlineWhenModded")) st.put("hideOnlineWhenModded", true);
+            if (!st.has("enableTrainer")) st.put("enableTrainer", true);
+            if (!st.has("developerMode")) st.put("developerMode", false);
+            if (!st.has("trainerConfig")) {
+                JSONObject tc = new JSONObject();
+                tc.put("unlockAllChars", false);
+                tc.put("unlockAllVariants", false);
+                tc.put("freeShop", false);
+                tc.put("startingGoldBonus", 0);
+                tc.put("startingLp", 0);
+                st.put("trainerConfig", tc);
+            }
+            if (!st.has("customCategories")) st.put("customCategories", new JSONArray());
+            if (!st.has("applied")) st.put("applied", false);
+            if (!st.has("appliedCount")) st.put("appliedCount", 0);
+            if (!st.has("mods")) st.put("mods", new JSONArray());
         } catch (Exception ignored) {}
-        return def;
+        return st;
     }
 
     public synchronized void saveState(JSONObject state) throws IOException {
@@ -80,7 +100,7 @@ public final class ModStore {
         try {
             st.put("hasVanilla", vanillaZip.isFile() && vanillaZip.length() > 1024);
             st.put("vanillaSizeMb", vanillaZip.isFile() ? Math.round(vanillaZip.length() / 104857.6) / 10.0 : 0.0);
-            st.put("overlayReady", overlayDir.isDirectory() && new File(overlayDir, "index.html").isFile());
+            st.put("overlayReady", overlayDir.isDirectory() && overlayDir.listFiles() != null && overlayDir.listFiles().length > 0);
         } catch (Exception ignored) {}
         return st;
     }
@@ -204,7 +224,7 @@ public final class ModStore {
     }
 
     /**
-     * Import any MOD archive (.zip Mod Spec v1, Desktop Studio Android Overlay .zip, Workspace Modpack .zip, or .ypk).
+     * Import any MOD archive (.yrdpk, .zip Mod Spec v1, Desktop Studio Android Overlay .zip, Workspace Modpack .zip, or .ypk).
      */
     public JSONObject importModArchive(Uri uri, ProgressCallback cb) throws Exception {
         String displayName = resolveDisplayName(uri);
@@ -219,7 +239,6 @@ public final class ModStore {
                 unzipSafely(in, stage);
             }
 
-            // Unwrap single top-level folder if present
             File root = unwrapSingleRootDir(stage);
 
             // Case 1: Desktop Studio Android Overlay ZIP (contains assets/web/)
@@ -229,7 +248,7 @@ public final class ModStore {
                 File dest = new File(modsDir, id);
                 deleteRecursive(dest);
                 copyDir(overlayWeb, new File(dest, "overlay"));
-                JSONObject meta = buildModRecord(id, stripExt(displayName), "1.0.0", "overlay",
+                JSONObject meta = buildModRecord(id, stripExt(displayName), "1.0.0", "overlay", "overhaul",
                     "Android Pre-Composed Overlay (" + countFiles(new File(dest, "overlay")) + " files)");
                 registerOrUpdateMod(meta);
                 if (cb != null) cb.onProgress("Imported Android Overlay: " + id, 100);
@@ -267,7 +286,7 @@ public final class ModStore {
                 return meta;
             }
 
-            // Case 4: Standard Mod Spec v1 folder (mod-manifest.json / cards / js / styles / overrides / etc.)
+            // Case 4: Standard Mod Spec v1 folder (.yrdpk / .zip)
             JSONObject meta = importSingleModFolder(root, stripExt(displayName));
             if (cb != null) cb.onProgress("Imported MOD: " + meta.optString("name"), 100);
             return meta;
@@ -280,20 +299,26 @@ public final class ModStore {
         String id = sanitizeId(fallbackName);
         String name = fallbackName;
         String version = "1.0.0";
+        String category = "";
+        JSONObject manifestObj = null;
         File manifest = new File(src, "mod-manifest.json");
         if (manifest.isFile()) {
             try {
-                JSONObject m = new JSONObject(readUtf8(manifest));
-                if (!m.optString("id", "").trim().isEmpty()) id = sanitizeId(m.getString("id"));
-                if (!m.optString("name", "").trim().isEmpty()) name = m.getString("name");
-                if (!m.optString("version", "").trim().isEmpty()) version = m.getString("version");
+                manifestObj = new JSONObject(readUtf8(manifest));
+                if (!manifestObj.optString("id", "").trim().isEmpty()) id = sanitizeId(manifestObj.getString("id"));
+                if (!manifestObj.optString("name", "").trim().isEmpty()) name = manifestObj.getString("name");
+                if (!manifestObj.optString("version", "").trim().isEmpty()) version = manifestObj.getString("version");
+                category = manifestObj.optString("category", "").trim();
             } catch (Exception ignored) {}
         }
         File dest = new File(modsDir, id);
         deleteRecursive(dest);
         copyDir(src, dest);
-        String summary = "Mod Spec v1 (" + countFiles(dest) + " files)";
-        JSONObject rec = buildModRecord(id, name, version, "modspec", summary);
+        if (category.isEmpty() || "auto".equalsIgnoreCase(category)) {
+            category = inferCategory(dest, manifestObj);
+        }
+        String summary = summarizeModDir(dest);
+        JSONObject rec = buildModRecord(id, name, version, "modspec", category, summary);
         registerOrUpdateMod(rec);
         return rec;
     }
@@ -417,12 +442,66 @@ public final class ModStore {
         manifest.put("name", fallbackName);
         manifest.put("version", "1.0.0");
         manifest.put("author", "YPK Import");
+        manifest.put("category", "cards");
         writeUtf8(new File(dest, "mod-manifest.json"), manifest.toString(2));
 
         String summary = String.format(Locale.US, "YPK (%d cards · %d Lua · %d art)", cardCount, luaCount, artCount);
-        JSONObject rec = buildModRecord(id, fallbackName, "1.0.0", "ypk", summary);
+        JSONObject rec = buildModRecord(id, fallbackName, "1.0.0", "ypk", "cards", summary);
         registerOrUpdateMod(rec);
         return rec;
+    }
+
+    public static String inferCategory(File modDir, JSONObject manifest) {
+        if (manifest != null) {
+            String cat = manifest.optString("category", "").trim();
+            if (!cat.isEmpty() && !"auto".equalsIgnoreCase(cat)) return cat;
+        }
+        boolean hasCards = hasFiles(new File(modDir, "cards")) || hasFiles(new File(modDir, "lua/cards")) || hasFiles(new File(modDir, "scripts"));
+        boolean hasChars = hasFiles(new File(modDir, "characters"));
+        boolean hasRelics = hasFiles(new File(modDir, "relics"));
+        boolean hasPacks = hasFiles(new File(modDir, "packs")) || hasFiles(new File(modDir, "preconstructed")) || hasFiles(new File(modDir, "decks"));
+        boolean hasTrainer = new File(modDir, "trainer.json").isFile();
+        boolean hasCss = hasFiles(new File(modDir, "styles")) || hasFiles(new File(modDir, "css"));
+        boolean hasJs = hasFiles(new File(modDir, "js"));
+        boolean hasCampaign = hasFiles(new File(modDir, "campaign")) || new File(modDir, "data/mod.json").isFile();
+
+        int buckets = (hasCards ? 1 : 0) + (hasChars ? 1 : 0) + (hasRelics ? 1 : 0) + (hasPacks ? 1 : 0) + (hasCampaign ? 1 : 0);
+        if (buckets >= 3 || hasCampaign) return "overhaul";
+        if (hasTrainer && !hasCards && !hasChars && !hasRelics) return "trainer";
+        if (hasCards) return "cards";
+        if (hasChars) return "characters";
+        if (hasRelics) return "relics";
+        if (hasPacks) return "packs_decks";
+        if (hasCss && !hasJs) return "ui_theme";
+        if (hasJs || hasCss) return "script_plugin";
+        return "other";
+    }
+
+    private static String summarizeModDir(File modDir) {
+        List<String> parts = new ArrayList<>();
+        int cards = countFiles(new File(modDir, "cards"));
+        int lua = countFiles(new File(modDir, "lua/cards")) + countFiles(new File(modDir, "scripts"));
+        int packs = countFiles(new File(modDir, "packs")) + countFiles(new File(modDir, "preconstructed")) + countFiles(new File(modDir, "decks"));
+        int chars = countFiles(new File(modDir, "characters"));
+        int relics = countFiles(new File(modDir, "relics"));
+        int js = countFiles(new File(modDir, "js"));
+        int css = countFiles(new File(modDir, "styles")) + countFiles(new File(modDir, "css"));
+        if (cards > 0) parts.add(cards + " card files");
+        if (lua > 0) parts.add(lua + " Lua");
+        if (packs > 0) parts.add(packs + " packs/decks");
+        if (chars > 0) parts.add(chars + " chars");
+        if (relics > 0) parts.add(relics + " relics");
+        if (js > 0) parts.add(js + " JS");
+        if (css > 0) parts.add(css + " CSS");
+        if (new File(modDir, "trainer.json").isFile()) parts.add("Trainer");
+        if (parts.isEmpty()) return "Mod Spec v1 (" + countFiles(modDir) + " files)";
+        return String.join(" · ", parts);
+    }
+
+    private static boolean hasFiles(File dir) {
+        if (!dir.isDirectory()) return false;
+        File[] f = dir.listFiles();
+        return f != null && f.length > 0;
     }
 
     public synchronized void toggleMod(String id, boolean enabled) throws Exception {
@@ -431,12 +510,95 @@ public final class ModStore {
         if (arr == null) return;
         for (int i = 0; i < arr.length(); i++) {
             JSONObject m = arr.getJSONObject(i);
-            if (id.equals(m.optString("id"))) {
+            if ("all".equals(id) || id.equals(m.optString("id"))) {
                 m.put("enabled", enabled);
+            }
+        }
+        saveState(st);
+    }
+
+    public synchronized void toggleCategory(String category, boolean enabled) throws Exception {
+        JSONObject st = loadState();
+        JSONArray arr = st.optJSONArray("mods");
+        if (arr == null) return;
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject m = arr.getJSONObject(i);
+            if (category.equalsIgnoreCase(m.optString("category", "other"))) {
+                m.put("enabled", enabled);
+            }
+        }
+        saveState(st);
+    }
+
+    public synchronized void setModCategory(String id, String category) throws Exception {
+        JSONObject st = loadState();
+        JSONArray arr = st.optJSONArray("mods");
+        if (arr == null) return;
+        String cleanCat = (category == null || category.trim().isEmpty()) ? "other" : category.trim();
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject m = arr.getJSONObject(i);
+            if (id.equals(m.optString("id"))) {
+                m.put("category", cleanCat);
                 break;
             }
         }
         saveState(st);
+    }
+
+    public synchronized void addCustomCategory(String name) throws Exception {
+        String clean = name == null ? "" : name.trim();
+        if (clean.isEmpty()) return;
+        JSONObject st = loadState();
+        JSONArray cats = st.optJSONArray("customCategories");
+        if (cats == null) cats = new JSONArray();
+        for (int i = 0; i < cats.length(); i++) {
+            if (clean.equalsIgnoreCase(cats.optString(i))) return;
+        }
+        cats.put(clean);
+        st.put("customCategories", cats);
+        saveState(st);
+    }
+
+    /** Smart auto-categorize & load-order sort (Overhaul -> Cards/Packs/Chars/Relics -> Scripts/UI -> Trainer). */
+    public synchronized int smartOrganizeMods() throws Exception {
+        JSONObject st = loadState();
+        JSONArray arr = st.optJSONArray("mods");
+        if (arr == null || arr.length() == 0) return 0;
+
+        List<JSONObject> list = new ArrayList<>();
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject m = arr.getJSONObject(i);
+            String id = m.optString("id");
+            String cat = m.optString("category", "").trim();
+            if (cat.isEmpty() || "auto".equalsIgnoreCase(cat) || "other".equalsIgnoreCase(cat)) {
+                File dir = new File(modsDir, id);
+                JSONObject mf = null;
+                File mff = new File(dir, "mod-manifest.json");
+                if (mff.isFile()) {
+                    try { mf = new JSONObject(readUtf8(mff)); } catch (Exception ignored) {}
+                }
+                m.put("category", inferCategory(dir, mf));
+            }
+            list.add(m);
+        }
+
+        list.sort((a, b) -> {
+            boolean ea = a.optBoolean("enabled", true);
+            boolean eb = b.optBoolean("enabled", true);
+            if (ea != eb) return ea ? -1 : 1;
+            int pa = CATEGORY_LOAD_PRIORITY.indexOf(a.optString("category", "other").toLowerCase(Locale.ROOT));
+            int pb = CATEGORY_LOAD_PRIORITY.indexOf(b.optString("category", "other").toLowerCase(Locale.ROOT));
+            if (pa < 0) pa = 5;
+            if (pb < 0) pb = 5;
+            if (pa != pb) return Integer.compare(pa, pb);
+            return a.optString("name", a.optString("id")).compareToIgnoreCase(b.optString("name", b.optString("id")));
+        });
+
+        JSONArray out = new JSONArray();
+        for (JSONObject m : list) out.put(m);
+        st.put("mods", out);
+        saveState(st);
+        return list.size();
     }
 
     public synchronized void moveMod(String id, int delta) throws Exception {
@@ -489,6 +651,10 @@ public final class ModStore {
         boolean replaced = false;
         for (int i = 0; i < arr.length(); i++) {
             if (rec.optString("id").equals(arr.getJSONObject(i).optString("id"))) {
+                // Preserve user's chosen category & enabled flag if re-importing
+                JSONObject old = arr.getJSONObject(i);
+                if (!old.optString("category", "").isEmpty()) rec.put("category", old.optString("category"));
+                rec.put("enabled", old.optBoolean("enabled", true));
                 arr.put(i, rec);
                 replaced = true;
                 break;
@@ -499,12 +665,13 @@ public final class ModStore {
         saveState(st);
     }
 
-    private static JSONObject buildModRecord(String id, String name, String ver, String kind, String summary) throws Exception {
+    private static JSONObject buildModRecord(String id, String name, String ver, String kind, String category, String summary) throws Exception {
         JSONObject o = new JSONObject();
         o.put("id", id);
         o.put("name", name);
         o.put("version", ver);
         o.put("kind", kind);
+        o.put("category", category == null || category.isEmpty() ? "other" : category);
         o.put("summary", summary);
         o.put("enabled", true);
         return o;
@@ -533,7 +700,7 @@ public final class ModStore {
         HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
         conn.setConnectTimeout(15000);
         conn.setReadTimeout(60000);
-        conn.setRequestProperty("User-Agent", "YGORogueDuelistModLoader-Android/1.3");
+        conn.setRequestProperty("User-Agent", "YGORogueDuelistModLoader-Android/1.4");
         return conn;
     }
 
@@ -573,7 +740,8 @@ public final class ModStore {
         if (children != null && children.length == 1 && children[0].isDirectory()) {
             String n = children[0].getName();
             if (!n.equals("assets") && !n.equals("cards") && !n.equals("js") && !n.equals("styles")
-                && !n.equals("lua") && !n.equals("script") && !n.equals("pics") && !n.equals("mods")) {
+                && !n.equals("css") && !n.equals("lua") && !n.equals("script") && !n.equals("scripts")
+                && !n.equals("pics") && !n.equals("mods")) {
                 return children[0];
             }
         }
@@ -635,8 +803,15 @@ public final class ModStore {
     }
 
     public static String sanitizeId(String raw) {
-        String s = raw == null ? "" : raw.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_-]+", "-").replaceAll("^-+|-+$", "");
-        return s.isEmpty() ? ("mod-" + System.currentTimeMillis() % 100000) : s;
+        if (raw == null || raw.trim().isEmpty()) {
+            return "mod-" + (System.currentTimeMillis() % 100000);
+        }
+        String trimmed = raw.trim();
+        String ascii = trimmed.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_-]+", "-").replaceAll("^-+|-+$", "");
+        if (!ascii.isEmpty()) return ascii;
+        // Deterministic slug for Unicode-only names (e.g. 惑乱魔卡组) so re-importing updates the same slot
+        int h = Math.abs(trimmed.hashCode());
+        return "mod-" + Integer.toHexString(h);
     }
 
     public static String stripExt(String name) {

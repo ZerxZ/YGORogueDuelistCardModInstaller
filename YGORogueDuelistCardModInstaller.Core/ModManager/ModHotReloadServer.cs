@@ -258,8 +258,10 @@ public sealed class ModHotReloadServer : IDisposable
                 picsDir,
                 silent,
                 ct,
-                developerMode: true,
-                hotReloadPort: Port), ct);
+                developerMode: state.DeveloperMode,
+                hotReloadPort: Port,
+                hideOnlineWhenModded: state.HideOnlineWhenModded,
+                enableBuiltInTrainer: state.EnableBuiltInTrainer || state.DeveloperMode), ct);
 
             var nextMap = new Dictionary<string, byte[]>(composed.Files, StringComparer.OrdinalIgnoreCase);
 

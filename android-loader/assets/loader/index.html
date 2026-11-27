@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
 <title>YGO Rogue MOD Loader</title>
 <style>
   :root {
@@ -10,134 +10,298 @@
     --fg: #f1f5f9; --muted: #94a3b8; --accent: #38bdf8; --ok: #22c55e; --warn: #f59e0b; --err: #ef4444;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--fg); padding-bottom: 88px; }
-  header { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between;
-    padding: 12px 16px; background: rgba(11,13,18,0.92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--border); }
-  .brand { font-weight: 700; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--fg); padding-bottom: 84px; }
+  header { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 10px 14px; background: rgba(11,13,18,0.94); backdrop-filter: blur(8px); border-bottom: 1px solid var(--border); }
+  .brand { font-weight: 700; font-size: 14px; display: flex; align-items: center; gap: 8px; }
   .pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(56,189,248,0.15); color: var(--accent); font-family: monospace; }
   .btn { border: 1px solid var(--border); background: var(--surface2); color: var(--fg); border-radius: 10px;
-    padding: 9px 13px; font-size: 13px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+    padding: 8px 12px; font-size: 12px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
   .btn:active { opacity: 0.78; transform: scale(0.98); }
+  .btn:disabled { opacity: 0.4; }
   .btn-primary { background: var(--accent); border-color: var(--accent); color: #06131c; }
   .btn-ok { background: var(--ok); border-color: var(--ok); color: #052010; }
   .btn-warn { background: rgba(245,158,11,0.16); border-color: rgba(245,158,11,0.45); color: var(--warn); }
   .btn-err { background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.35); color: var(--err); }
-  .btn-sm { padding: 5px 9px; font-size: 12px; border-radius: 8px; }
-  main { padding: 14px; display: flex; flex-direction: column; gap: 14px; max-width: 680px; margin: 0 auto; }
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
-  .card-title { font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .muted { font-size: 12px; color: var(--muted); line-height: 1.45; }
+  .btn-sm { padding: 5px 8px; font-size: 11px; border-radius: 8px; }
+  main { padding: 12px; display: grid; grid-template-columns: 1fr; gap: 12px; max-width: 1120px; margin: 0 auto; }
+  @media (min-width: 720px) {
+    main { grid-template-columns: 360px 1fr; align-items: start; }
+    .span-full { grid-column: 1 / -1; }
+  }
+  .col { display: flex; flex-direction: column; gap: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 13px; display: flex; flex-direction: column; gap: 10px; }
+  .card-title { font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .muted { font-size: 11.5px; color: var(--muted); line-height: 1.45; }
   .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  select, input[type=text] { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px; font-size: 12px; flex: 1; min-width: 140px; }
-  .mod-item { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; display: flex; align-items: center; gap: 10px; }
+  select, input[type=text], input[type=number] { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 9px; padding: 7px 9px; font-size: 12px; }
+  select, input[type=text] { flex: 1; min-width: 110px; }
+  .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 8px; border-radius: 10px; background: var(--bg); border: 1px solid var(--border); }
+  .switch-text { flex: 1; min-width: 0; }
+  .switch-text b { display: block; font-size: 12px; }
+  .switch-text span { display: block; font-size: 10.5px; color: var(--muted); }
+  .cat-group { border: 1px solid var(--border); border-radius: 12px; background: var(--bg); overflow: hidden; }
+  .cat-hdr { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: rgba(28,34,48,0.75); border-bottom: 1px solid var(--border); cursor: pointer; }
+  .cat-title { font-size: 12px; font-weight: 700; flex: 1; }
+  .cat-items { display: flex; flex-direction: column; gap: 6px; padding: 8px; }
+  .mod-item { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; display: flex; align-items: center; gap: 8px; }
   .mod-info { flex: 1; min-width: 0; }
-  .mod-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .mod-meta { font-size: 11px; color: var(--muted); margin-top: 2px; font-family: monospace; }
-  .tag { font-size: 10px; padding: 1px 6px; border-radius: 6px; background: var(--surface2); color: var(--accent); margin-right: 4px; text-transform: uppercase; }
+  .mod-name { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mod-meta { font-size: 10.5px; color: var(--muted); margin-top: 2px; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+  .tag { font-size: 10px; padding: 1px 6px; border-radius: 6px; background: var(--surface2); color: var(--accent); font-family: monospace; }
+  .cat-sel { flex: 0 0 auto; min-width: 0; padding: 3px 6px; font-size: 10.5px; border-radius: 6px; }
   .progress-box { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: none; }
   .bar-bg { height: 6px; background: var(--bg); border-radius: 99px; overflow: hidden; margin-top: 6px; }
   .bar-fill { height: 100%; background: var(--accent); width: 0%; transition: width .2s; }
-  .toast { position: fixed; left: 14px; right: 14px; bottom: 86px; z-index: 30; padding: 11px 14px; border-radius: 11px;
-    font-size: 13px; font-weight: 600; background: #1e293b; border: 1px solid var(--accent); display: none; max-width: 650px; margin: 0 auto; }
-  footer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: flex; gap: 8px; padding: 12px 14px;
-    background: rgba(11,13,18,0.95); backdrop-filter: blur(8px); border-top: 1px solid var(--border); }
-  footer .btn { flex: 1; padding: 11px 10px; }
-  input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
+  .toast { position: fixed; left: 14px; right: 14px; bottom: 82px; z-index: 30; padding: 10px 14px; border-radius: 11px;
+    font-size: 12.5px; font-weight: 600; background: #1e293b; border: 1px solid var(--accent); display: none; max-width: 680px; margin: 0 auto; }
+  footer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: flex; gap: 8px; padding: 10px 12px;
+    background: rgba(11,13,18,0.96); backdrop-filter: blur(8px); border-top: 1px solid var(--border); }
+  footer .btn { flex: 1; padding: 10px 8px; }
+  input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); flex-shrink: 0; }
 </style>
 </head>
 <body>
 <header>
   <div class="brand">
-    <span>YGO Rogue MOD Loader</span>
+    <span>YGO Rogue MOD</span>
     <span class="pill" id="verPill">Android</span>
   </div>
-  <button class="btn btn-sm" id="langBtn" onclick="toggleLang()">EN</button>
+  <div class="row" style="gap:6px;">
+    <select id="orientSel" onchange="setOrientation(this.value)" style="flex:0 0 auto;min-width:0;padding:4px 8px;font-size:11px;">
+      <option value="auto">屏幕：自动</option>
+      <option value="landscape">屏幕：横屏</option>
+      <option value="portrait">屏幕：竖屏</option>
+    </select>
+    <button class="btn btn-sm" id="langBtn" onclick="toggleLang()">EN</button>
+  </div>
 </header>
 
 <main>
-  <div class="progress-box" id="progressBox">
+  <div class="progress-box span-full" id="progressBox">
     <div id="progressText" style="font-size:12px;font-weight:600;">Working...</div>
     <div class="bar-bg"><div class="bar-fill" id="progressFill"></div></div>
   </div>
 
-  <!-- 1. Base Game Data (web-*.zip) -->
-  <section class="card">
-    <div class="card-title">
-      <span id="tBaseTitle">原版游戏数据包 (web-*.zip)</span>
-      <span class="pill" id="baseStatus">未安装</span>
-    </div>
-    <div class="muted" id="tBaseHint">无需安装官方 APK：可直接下载官方 web-*.zip 或从手机本地导入，MOD 会以零拷贝叠加层方式加载。</div>
-    <div class="row">
-      <select id="proxySel">
-        <option value="">GitHub 直连 / Direct</option>
-        <option value="https://ghfast.top/">ghfast.top 代理加速</option>
-        <option value="https://gh-proxy.com/">gh-proxy.com 代理加速</option>
-      </select>
-    </div>
-    <div class="row">
-      <button class="btn btn-primary" style="flex:1" onclick="downloadBase()" id="tDownloadBase">下载最新 web-*.zip</button>
-      <button class="btn" style="flex:1" onclick="AndroidModLoader.pickImportWebZip()" id="tImportBase">导入本地 web-.zip</button>
-    </div>
-  </section>
+  <!-- LEFT COLUMN: Base Game + Built-in Trainer & Safety Settings -->
+  <div class="col">
+    <section class="card">
+      <div class="card-title">
+        <span id="tBaseTitle">原版游戏数据包 (web-*.zip)</span>
+        <span class="pill" id="baseStatus">未安装</span>
+      </div>
+      <div class="muted" id="tBaseHint">原生全屏横/竖屏运行，零拷贝叠加 MOD，独立安装不覆盖官方 APK。</div>
+      <div class="row">
+        <select id="proxySel">
+          <option value="">GitHub 直连 / Direct</option>
+          <option value="https://ghfast.top/">ghfast.top 代理加速</option>
+          <option value="https://gh-proxy.com/">gh-proxy.com 代理加速</option>
+        </select>
+      </div>
+      <div class="row">
+        <button class="btn btn-primary" style="flex:1" onclick="downloadBase()" id="tDownloadBase">下载最新 web-*.zip</button>
+        <button class="btn" style="flex:1" onclick="AndroidModLoader.pickImportWebZip()" id="tImportBase">导入本地 web-.zip</button>
+      </div>
+    </section>
 
-  <!-- 2. Import-Only MOD Manager -->
-  <section class="card">
-    <div class="card-title">
-      <span id="tModsTitle">已导入 MOD 列表（下层优先）</span>
-      <button class="btn btn-primary btn-sm" onclick="AndroidModLoader.pickImportMod()" id="tImportMod">+ 导入 MOD / .ypk</button>
-    </div>
-    <div class="muted" id="tModsHint">支持直接导入：PC 工坊导出的 Android 覆盖包 (.zip)、标准 Mod Spec v1 (.zip)、工作区整合包 (.zip) 与 YGOPro/MDPro3 扩展包 (.ypk)。</div>
-    <div id="modList" style="display:flex;flex-direction:column;gap:8px;"></div>
-  </section>
+    <!-- Built-in Trainer & Gameplay Safety (No MOD Editor, Keeps Trainer!) -->
+    <section class="card">
+      <div class="card-title">
+        <span id="tTrainerTitle">⚡ 内置修改器与联机保护</span>
+      </div>
+
+      <label class="switch-row">
+        <div class="switch-text">
+          <b id="tHideOnline">MOD 模式隐藏多人在线联机</b>
+          <span id="tHideOnlineDesc">防止 MOD 影响原版联机乐趣；点击底部「纯净原版启动」则正常显示联机</span>
+        </div>
+        <input type="checkbox" id="chkHideOnline" onchange="AndroidModLoader.setBoolSetting('hideOnlineWhenModded', this.checked)" />
+      </label>
+
+      <label class="switch-row">
+        <div class="switch-text">
+          <b id="tEnableTrainer">启用游戏内悬浮修改器 (⚡)</b>
+          <span id="tEnableTrainerDesc">右下角快捷打开：金币、LP、0元商店、加卡、清诅咒、直接胜利、倍速</span>
+        </div>
+        <input type="checkbox" id="chkEnableTrainer" onchange="AndroidModLoader.setBoolSetting('enableTrainer', this.checked)" />
+      </label>
+
+      <div class="row" style="gap:6px;">
+        <label class="switch-row" style="flex:1;min-width:130px;">
+          <div class="switch-text"><b id="tUnlockChars">解锁全角色</b></div>
+          <input type="checkbox" id="trUnlockChars" onchange="saveTrainerCfg()" />
+        </label>
+        <label class="switch-row" style="flex:1;min-width:130px;">
+          <div class="switch-text"><b id="tUnlockVars">解锁全形态</b></div>
+          <input type="checkbox" id="trUnlockVars" onchange="saveTrainerCfg()" />
+        </label>
+      </div>
+
+      <div class="row" style="gap:6px;">
+        <label class="switch-row" style="flex:1;min-width:130px;">
+          <div class="switch-text"><b id="tFreeShop">开局0元商店</b></div>
+          <input type="checkbox" id="trFreeShop" onchange="saveTrainerCfg()" />
+        </label>
+        <label class="switch-row" style="flex:1;min-width:130px;">
+          <div class="switch-text"><b id="tDevMode">开发者调试 (FPS)</b></div>
+          <input type="checkbox" id="chkDevMode" onchange="AndroidModLoader.setBoolSetting('developerMode', this.checked)" />
+        </label>
+      </div>
+
+      <div class="row" style="gap:6px;">
+        <input type="number" id="trGold" placeholder="开局额外金币 (0=原版)" style="flex:1;min-width:120px;" onchange="saveTrainerCfg()" />
+        <input type="number" id="trLp" placeholder="初始 LP (0=原版)" style="flex:1;min-width:120px;" onchange="saveTrainerCfg()" />
+      </div>
+    </section>
+  </div>
+
+  <!-- RIGHT COLUMN: Categorized MOD Checklist + Smart Organize -->
+  <div class="col">
+    <section class="card">
+      <div class="card-title">
+        <span id="tModsTitle">MOD 清单列表（可分类整理）</span>
+        <div class="row" style="gap:5px;">
+          <button class="btn btn-sm" onclick="toggleViewMode()" id="viewModeBtn">分类视图</button>
+          <button class="btn btn-warn btn-sm" onclick="AndroidModLoader.smartOrganize()" id="tSmartOrg">✨ 智能整理</button>
+          <button class="btn btn-primary btn-sm" onclick="AndroidModLoader.pickImportMod()" id="tImportMod">+ 导入 MOD</button>
+        </div>
+      </div>
+
+      <div class="row" style="gap:6px;">
+        <input type="text" id="searchBox" placeholder="搜索 MOD 名称或分类..." oninput="render()" />
+        <button class="btn btn-sm" onclick="promptAddCat()" id="tAddCat">+ 分类</button>
+        <button class="btn btn-sm" onclick="AndroidModLoader.toggleMod('all', true)" id="tAllOn">全选</button>
+        <button class="btn btn-sm" onclick="AndroidModLoader.toggleMod('all', false)" id="tAllOff">全不选</button>
+      </div>
+
+      <div id="modList" style="display:flex;flex-direction:column;gap:8px;"></div>
+    </section>
+  </div>
 </main>
 
 <div class="toast" id="toastBox"></div>
 
 <footer>
-  <button class="btn btn-warn" onclick="AndroidModLoader.restoreVanilla()" id="tRestore">还原原版</button>
-  <button class="btn btn-primary" onclick="AndroidModLoader.applyMods(false)" id="tApply">应用 MOD</button>
-  <button class="btn btn-ok" onclick="AndroidModLoader.applyMods(true)" id="tPlay">▶ 应用并开玩</button>
+  <button class="btn btn-warn" onclick="AndroidModLoader.launchVanilla()" id="tVanillaPlay">▶ 纯净原版</button>
+  <button class="btn" onclick="AndroidModLoader.applyMods(false)" id="tApply">应用配置</button>
+  <button class="btn btn-ok" onclick="AndroidModLoader.applyMods(true)" id="tPlay">▶ MOD 开玩</button>
 </footer>
 
 <script>
-let state = { lang: 'zh', mods: [], hasVanilla: false, vanillaVersion: '' };
+let state = { lang: 'zh', mods: [], hasVanilla: false, vanillaVersion: '', orientation: 'auto', hideOnlineWhenModded: true, enableTrainer: true, developerMode: false, trainerConfig: {}, customCategories: [] };
+let groupedView = true;
+const collapsedCats = new Set();
+
+const STD_CATS = [
+  { id: 'overhaul', zh: '大型综合 / 规则', en: 'Overhaul / Rules' },
+  { id: 'cards', zh: '卡牌 / 卡组扩展', en: 'Cards / Archetypes' },
+  { id: 'packs_decks', zh: '卡包与预组', en: 'Packs & Decks' },
+  { id: 'characters', zh: '角色扩展', en: 'Characters' },
+  { id: 'relics', zh: '遗物扩展', en: 'Relics' },
+  { id: 'script_plugin', zh: '功能脚本 / 插件', en: 'Scripts & Plugins' },
+  { id: 'ui_theme', zh: '界面与美化', en: 'UI & Themes' },
+  { id: 'trainer', zh: '修改器 / 数值', en: 'Trainer / Cheats' },
+  { id: 'other', zh: '其他', en: 'Other' }
+];
 
 const I18N = {
   zh: {
     baseTitle: '原版游戏数据包 (web-*.zip)',
-    baseHint: '无需覆盖官方 APK：直接下载官方 web-*.zip 或导入本地包，所有 MOD 通过零拷贝叠加层运行（与官方版独立共存）。',
+    baseHint: '原生全屏横/竖屏运行，去除网页版提示，零拷贝叠加 MOD，与官方 APK 独立共存。',
     dlBase: '下载最新 web-*.zip', importBase: '导入本地 web-.zip',
-    modsTitle: '已导入 MOD 列表（按顺序加载）', importMod: '+ 导入 .yrdpk / .zip / .ypk',
-    modsHint: '仅需导入即可游玩：支持 .yrdpk 专属 MOD 包、PC 工坊导出的 Android 覆盖包 (.zip)、Mod Spec v1 (.zip)、工作区整合包及 .ypk 扩展卡包。',
-    restore: '还原原版', apply: '应用 MOD', play: '▶ 应用并开玩',
-    empty: '还没有导入任何 MOD，点击右上角「+ 导入 MOD / .ypk」添加。',
+    trainerTitle: '⚡ 内置修改器与联机保护',
+    hideOnline: 'MOD 模式隐藏多人在线联机',
+    hideOnlineDesc: '防止 MOD 破坏原版联机体验；点底部「纯净原版」启动则正常显示联机',
+    enableTrainer: '启用游戏内悬浮修改器 (⚡)',
+    enableTrainerDesc: '无需开发者模式！局内点击右下角打开：金币、LP、0元商店、加卡、倍速、直接胜利',
+    unlockChars: '解锁全角色', unlockVars: '解锁全形态', freeShop: '开局0元商店', devMode: '开发者调试 (FPS)',
+    modsTitle: 'MOD 清单列表（可分类整理）', smartOrg: '✨ 智能整理', importMod: '+ 导入 .yrdpk / .zip / .ypk',
+    addCat: '+ 分类', allOn: '全选', allOff: '全不选',
+    viewGrouped: '分类清单', viewFlat: '顺序视图',
+    vanillaPlay: '▶ 纯净原版', apply: '应用配置', play: '▶ MOD 开玩',
+    empty: '还没有导入 MOD。点击右上角「+ 导入 .yrdpk / .zip / .ypk」添加。',
     notInstalled: '未下载', ready: '已就绪'
   },
   en: {
     baseTitle: 'Base Game Data (web-*.zip)',
-    baseHint: 'Installs side-by-side with the official APK. Download or import web-*.zip; enabled MODs run via zero-copy overlay.',
-    dlBase: 'Download Latest web-.zip', importBase: 'Import Local web-.zip',
-    modsTitle: 'Imported MODs (Load Order)', importMod: '+ Import .yrdpk / .zip / .ypk',
-    modsHint: 'Import-only loader: supports .yrdpk MOD packages, Desktop Studio Android Overlays (.zip), Mod Spec v1 (.zip), Workspace Packs & .ypk.',
-    restore: 'Restore Vanilla', apply: 'Apply MODs', play: '▶ Apply & Play',
-    empty: 'No MODs imported yet. Tap "+ Import MOD / .ypk" above.',
+    baseHint: 'Native fullscreen landscape/portrait mode with zero-copy MOD overlay. Coexists with official APK.',
+    dlBase: 'Download web-*.zip', importBase: 'Import Local web-.zip',
+    trainerTitle: '⚡ Built-in Trainer & Online Guard',
+    hideOnline: 'Hide Online Multiplayer when Modded',
+    hideOnlineDesc: 'Protects vanilla multiplayer; use "Play Vanilla" below for normal Online play.',
+    enableTrainer: 'In-Game Floating Trainer (⚡)',
+    enableTrainerDesc: 'Gold, LP, Free Shop, Add Card, Clear Curses, Instant Win & Speed — no Dev Mode needed.',
+    unlockChars: 'Unlock Chars', unlockVars: 'Unlock Variants', freeShop: 'Free Shop', devMode: 'Dev Mode (FPS)',
+    modsTitle: 'MOD Checklist (Categorized)', smartOrg: '✨ Smart Sort', importMod: '+ Import MOD',
+    addCat: '+ Cat', allOn: 'All On', allOff: 'All Off',
+    viewGrouped: 'Grouped', viewFlat: 'Flat Order',
+    vanillaPlay: '▶ Play Vanilla', apply: 'Apply', play: '▶ Play Modded',
+    empty: 'No MODs imported yet. Tap "+ Import MOD" above.',
     notInstalled: 'Missing', ready: 'Ready'
   }
 };
 
+function allCategories() {
+  const isEn = state.lang === 'en';
+  const list = STD_CATS.map(c => ({ id: c.id, label: isEn ? c.en : c.zh }));
+  const custom = state.customCategories || [];
+  for (const name of custom) {
+    if (name && !list.some(c => c.id.toLowerCase() === name.toLowerCase())) {
+      list.push({ id: name, label: name });
+    }
+  }
+  return list;
+}
+
+function catLabel(catId) {
+  const found = allCategories().find(c => c.id.toLowerCase() === String(catId || 'other').toLowerCase());
+  return found ? found.label : (catId || 'Other');
+}
+
 function render() {
-  const d = I18N[state.lang === 'en' ? 'en' : 'zh'];
-  document.getElementById('langBtn').textContent = state.lang === 'en' ? '中文' : 'EN';
+  const isEn = state.lang === 'en';
+  const d = I18N[isEn ? 'en' : 'zh'];
+  document.getElementById('langBtn').textContent = isEn ? '中文' : 'EN';
   document.getElementById('tBaseTitle').textContent = d.baseTitle;
   document.getElementById('tBaseHint').textContent = d.baseHint;
   document.getElementById('tDownloadBase').textContent = d.dlBase;
   document.getElementById('tImportBase').textContent = d.importBase;
+  document.getElementById('tTrainerTitle').textContent = d.trainerTitle;
+  document.getElementById('tHideOnline').textContent = d.hideOnline;
+  document.getElementById('tHideOnlineDesc').textContent = d.hideOnlineDesc;
+  document.getElementById('tEnableTrainer').textContent = d.enableTrainer;
+  document.getElementById('tEnableTrainerDesc').textContent = d.enableTrainerDesc;
+  document.getElementById('tUnlockChars').textContent = d.unlockChars;
+  document.getElementById('tUnlockVars').textContent = d.unlockVars;
+  document.getElementById('tFreeShop').textContent = d.freeShop;
+  document.getElementById('tDevMode').textContent = d.devMode;
   document.getElementById('tModsTitle').textContent = d.modsTitle;
+  document.getElementById('tSmartOrg').textContent = d.smartOrg;
   document.getElementById('tImportMod').textContent = d.importMod;
-  document.getElementById('tModsHint').textContent = d.modsHint;
-  document.getElementById('tRestore').textContent = d.restore;
+  document.getElementById('tAddCat').textContent = d.addCat;
+  document.getElementById('tAllOn').textContent = d.allOn;
+  document.getElementById('tAllOff').textContent = d.allOff;
+  document.getElementById('viewModeBtn').textContent = groupedView ? d.viewGrouped : d.viewFlat;
+  document.getElementById('tVanillaPlay').textContent = d.vanillaPlay;
   document.getElementById('tApply').textContent = d.apply;
   document.getElementById('tPlay').textContent = d.play;
+
+  const oSel = document.getElementById('orientSel');
+  oSel.options[0].textContent = isEn ? 'Screen: Auto' : '屏幕：自动';
+  oSel.options[1].textContent = isEn ? 'Screen: Landscape' : '屏幕：横屏';
+  oSel.options[2].textContent = isEn ? 'Screen: Portrait' : '屏幕：竖屏';
+  oSel.value = state.orientation || 'auto';
+
+  document.getElementById('chkHideOnline').checked = state.hideOnlineWhenModded !== false;
+  document.getElementById('chkEnableTrainer').checked = state.enableTrainer !== false;
+  document.getElementById('chkDevMode').checked = !!state.developerMode;
+
+  const tc = state.trainerConfig || {};
+  document.getElementById('trUnlockChars').checked = !!tc.unlockAllChars;
+  document.getElementById('trUnlockVars').checked = !!tc.unlockAllVariants;
+  document.getElementById('trFreeShop').checked = !!tc.freeShop;
+  document.getElementById('trGold').value = tc.startingGoldBonus || '';
+  document.getElementById('trLp').value = tc.startingLp || '';
 
   const baseStatus = document.getElementById('baseStatus');
   baseStatus.textContent = state.hasVanilla
@@ -153,29 +317,102 @@ function render() {
   }
 
   const listEl = document.getElementById('modList');
-  const mods = state.mods || [];
+  const q = (document.getElementById('searchBox').value || '').trim().toLowerCase();
+  const allMods = state.mods || [];
+  const mods = allMods.filter(m => !q || (m.name || '').toLowerCase().includes(q) || (m.id || '').toLowerCase().includes(q) || catLabel(m.category).toLowerCase().includes(q));
+
   if (!mods.length) {
-    listEl.innerHTML = `<div class="muted" style="text-align:center;padding:18px 8px;">${d.empty}</div>`;
+    listEl.innerHTML = `<div class="muted" style="text-align:center;padding:20px 8px;">${d.empty}</div>`;
     return;
   }
-  listEl.innerHTML = mods.map((m, i) => `
-    <div class="mod-item">
-      <input type="checkbox" ${m.enabled ? 'checked' : ''} onchange="AndroidModLoader.toggleMod('${esc(m.id)}', this.checked)" />
-      <div class="mod-info">
-        <div class="mod-name">${esc(m.name || m.id)}</div>
-        <div class="mod-meta"><span class="tag">${esc(m.kind || 'mod')}</span>${esc(m.summary || m.id)}</div>
-      </div>
-      <div style="display:flex;gap:4px;">
-        <button class="btn btn-sm" ${i === 0 ? 'disabled' : ''} onclick="AndroidModLoader.moveMod('${esc(m.id)}', -1)">▲</button>
-        <button class="btn btn-sm" ${i === mods.length - 1 ? 'disabled' : ''} onclick="AndroidModLoader.moveMod('${esc(m.id)}', 1)">▼</button>
-        <button class="btn btn-err btn-sm" onclick="AndroidModLoader.deleteMod('${esc(m.id)}')">✕</button>
-      </div>
-    </div>
-  `).join('');
+
+  const cats = allCategories();
+  const renderRow = (m) => {
+    const idx = allMods.findIndex(x => x.id === m.id);
+    const curCat = m.category || 'other';
+    const opts = cats.map(c => `<option value="${esc(c.id)}" ${c.id.toLowerCase() === curCat.toLowerCase() ? 'selected' : ''}>${esc(c.label)}</option>`).join('');
+    return `
+      <div class="mod-item">
+        <input type="checkbox" ${m.enabled ? 'checked' : ''} onchange="AndroidModLoader.toggleMod('${esc(m.id)}', this.checked)" />
+        <div class="mod-info">
+          <div class="mod-name">#${idx + 1} ${esc(m.name || m.id)}</div>
+          <div class="mod-meta">
+            <select class="cat-sel" onchange="AndroidModLoader.setModCategory('${esc(m.id)}', this.value)">${opts}</select>
+            <span>${esc(m.summary || m.id)}</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:4px;">
+          <button class="btn btn-sm" ${idx === 0 ? 'disabled' : ''} onclick="AndroidModLoader.moveMod('${esc(m.id)}', -1)">▲</button>
+          <button class="btn btn-sm" ${idx === allMods.length - 1 ? 'disabled' : ''} onclick="AndroidModLoader.moveMod('${esc(m.id)}', 1)">▼</button>
+          <button class="btn btn-err btn-sm" onclick="AndroidModLoader.deleteMod('${esc(m.id)}')">✕</button>
+        </div>
+      </div>`;
+  };
+
+  if (!groupedView) {
+    listEl.innerHTML = mods.map(renderRow).join('');
+    return;
+  }
+
+  const groups = new Map();
+  for (const m of mods) {
+    const cid = m.category || 'other';
+    if (!groups.has(cid)) groups.set(cid, []);
+    groups.get(cid).push(m);
+  }
+
+  listEl.innerHTML = Array.from(groups.entries()).map(([cid, items]) => {
+    const enCount = items.filter(x => x.enabled).length;
+    const allChecked = enCount === items.length && items.length > 0;
+    const isCollapsed = collapsedCats.has(cid);
+    return `
+      <div class="cat-group">
+        <div class="cat-hdr" onclick="toggleCollapse('${esc(cid)}')">
+          <input type="checkbox" ${allChecked ? 'checked' : ''} onclick="event.stopPropagation()" onchange="AndroidModLoader.toggleCategory('${esc(cid)}', this.checked)" />
+          <span class="cat-title">${isCollapsed ? '▸' : '▾'} ${esc(catLabel(cid))}</span>
+          <span class="pill">${enCount}/${items.length}</span>
+        </div>
+        ${isCollapsed ? '' : `<div class="cat-items">${items.map(renderRow).join('')}</div>`}
+      </div>`;
+  }).join('');
 }
 
 function esc(s) {
   return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function toggleCollapse(cid) {
+  if (collapsedCats.has(cid)) collapsedCats.delete(cid); else collapsedCats.add(cid);
+  render();
+}
+
+function toggleViewMode() {
+  groupedView = !groupedView;
+  render();
+}
+
+function setOrientation(val) {
+  state.orientation = val;
+  if (window.AndroidModLoader) AndroidModLoader.setSetting('orientation', val);
+}
+
+function saveTrainerCfg() {
+  const cfg = {
+    unlockAllChars: document.getElementById('trUnlockChars').checked,
+    unlockAllVariants: document.getElementById('trUnlockVars').checked,
+    freeShop: document.getElementById('trFreeShop').checked,
+    startingGoldBonus: Math.max(0, Number(document.getElementById('trGold').value) || 0),
+    startingLp: Math.max(0, Number(document.getElementById('trLp').value) || 0)
+  };
+  state.trainerConfig = cfg;
+  if (window.AndroidModLoader) AndroidModLoader.setTrainerConfig(JSON.stringify(cfg));
+}
+
+function promptAddCat() {
+  const name = prompt(state.lang === 'en' ? 'New category name:' : '输入新分类名称（如：虫惑魔 / 美化 / 难度）：');
+  if (name && name.trim() && window.AndroidModLoader) {
+    AndroidModLoader.addCustomCategory(name.trim());
+  }
 }
 
 function toggleLang() {

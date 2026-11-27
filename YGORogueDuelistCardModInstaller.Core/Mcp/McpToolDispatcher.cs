@@ -259,6 +259,26 @@ public static class McpToolDispatcher
                 ("root", Str("Optional workspace root path"))),
             ["target"]),
 
+        Tool("organize_mods", "Organize the user's MOD checklist by assigning categories (standard or custom Chinese/English categories) and optimal load order. Pass mode='smart' for automatic local rule-based sorting, or pass explicit 'items' ([{id, category}]) to apply AI-designed organization directly.",
+            Obj(
+                ("mode", Str("smart (default auto-categorize & sort) | custom (apply provided items list)")),
+                ("apply", Bool("Whether to apply immediately (default true)")),
+                ("items", new JsonObject
+                {
+                    ["type"] = "array",
+                    ["description"] = "Optional ordered array of {id, category} objects to apply custom AI organization",
+                    ["items"] = new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject
+                        {
+                            ["id"] = Str("Exact managed MOD ID"),
+                            ["category"] = Str("Category slug or custom display name")
+                        }
+                    }
+                }),
+                ("root", Str("Optional workspace root path")))),
+
         Tool("apply_or_restore_mods", "Apply enabled mods to the game (default zero-touch VirtualBundle mode), dry-run BuildOnly export, or restore vanilla.",
             Obj(
                 ("action", Str("Action: apply | build_only | restore")),
@@ -312,6 +332,7 @@ public static class McpToolDispatcher
                 "write_mod_file" => HandleWriteFile(engine, args, hooks),
                 "read_mod_file" => HandleReadFile(engine, args),
                 "validate_mod" => HandleValidateMod(engine, args),
+                "organize_mods" => HandleOrganizeMods(engine, args, hooks),
                 "apply_or_restore_mods" => await HandleApplyOrRestoreAsync(engine, args, ct),
                 _ => throw new ModOperationException($"Unknown MCP tool: {name}")
             };
@@ -1310,6 +1331,63 @@ public static class McpToolDispatcher
         }
 
         array.Add((JsonNode?)newObj);
+    }
+
+    private static string HandleOrganizeMods(ModInjectionEngine engine, JsonObject args, McpHostHooks? hooks)
+    {
+        var state = engine.Repository.LoadState();
+        var mods = engine.Repository.LoadMods(state);
+        var conflicts = ModConflictAnalyzer.Analyze(mods);
+        var apply = args["apply"] is not JsonValue av || !av.TryGetValue<bool>(out var ab) || ab;
+
+        ModOrganizePlan plan;
+        if (args["items"] is JsonArray itemsArr && itemsArr.Count > 0)
+        {
+            var byId = mods.ToDictionary(m => m.Id, StringComparer.OrdinalIgnoreCase);
+            var list = new List<ModOrganizeItem>();
+            foreach (var node in itemsArr)
+            {
+                if (node is not JsonObject obj) continue;
+                var id = obj["id"]?.GetValue<string>()?.Trim() ?? obj["modId"]?.GetValue<string>()?.Trim() ?? string.Empty;
+                if (!byId.TryGetValue(id, out var m)) continue;
+                var oldCat = ModRepository.ResolveEffectiveCategory(m.Manifest, m.Stats);
+                var newCat = ModRepository.NormalizeCategory(obj["category"]?.GetValue<string>()) ?? oldCat;
+                list.Add(new ModOrganizeItem(m.Id, m.Manifest.Name, oldCat, newCat, m.Order, list.Count, "Organized by MCP AI"));
+            }
+            plan = new ModOrganizePlan("mcp", $"MCP AI organized {list.Count} MOD(s).", list, []);
+        }
+        else
+        {
+            plan = ModOrganizer.BuildLocalSmartPlan(mods, conflicts, preserveExistingCustomCategories: true);
+        }
+
+        if (apply)
+        {
+            ModOrganizer.ApplyPlan(engine.Repository, plan);
+            hooks?.OnModMutated?.Invoke("*", null, "organize_mods");
+        }
+
+        var resArr = new JsonArray();
+        foreach (var it in plan.Items)
+        {
+            resArr.Add((JsonNode?)new JsonObject
+            {
+                ["id"] = it.ModId,
+                ["name"] = it.ModName,
+                ["oldCategory"] = it.OldCategory,
+                ["newCategory"] = it.NewCategory,
+                ["oldOrder"] = it.OldOrder,
+                ["newOrder"] = it.NewOrder,
+                ["reason"] = it.Reason
+            });
+        }
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["applied"] = apply,
+            ["summary"] = plan.Summary,
+            ["items"] = resArr
+        }.ToJsonString(PrettyNodeOptions);
     }
 
     private static string SanitizeJsonFileName(string? raw, string fallback)

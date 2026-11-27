@@ -264,6 +264,9 @@ public sealed partial class DesktopApiServer : IDisposable
             "/api/mods/metadata" => HandleUpdateModMetadata(body),
             "/api/mods/import" => HandleImportMod(body),
             "/api/mods/toggle" => HandleToggleMod(body),
+            "/api/mods/toggle-category" => HandleToggleCategory(body),
+            "/api/mods/categories" => HandleManageCategories(body),
+            "/api/mods/organize" => await HandleOrganizeModsAsync(body, ct),
             "/api/mods/reorder" => HandleReorderMods(body),
             "/api/mods/delete" => HandleDeleteMod(body),
             "/api/mods/pack" => HandlePackMod(body),
@@ -443,6 +446,12 @@ public sealed partial class DesktopApiServer : IDisposable
             ["launcherBuild"] = status.LauncherMeta?.LauncherBuild ?? 0,
             ["mode"] = status.Mode.ToString(),
             ["developerMode"] = status.DeveloperMode,
+            ["hideOnlineWhenModded"] = status.HideOnlineWhenModded,
+            ["enableBuiltInTrainer"] = status.EnableBuiltInTrainer,
+            ["customCategories"] = ToStrArray(state.CustomCategories),
+            ["aiApiBaseUrl"] = state.AiApiBaseUrl ?? string.Empty,
+            ["aiApiModel"] = state.AiApiModel ?? string.Empty,
+            ["hasAiApiKey"] = !string.IsNullOrWhiteSpace(state.AiApiKey),
             ["language"] = string.IsNullOrWhiteSpace(state.Language) ? "zh" : state.Language,
             ["syncState"] = status.SyncState.ToString(),
             ["syncSummary"] = status.SyncSummary,
@@ -544,10 +553,31 @@ public sealed partial class DesktopApiServer : IDisposable
                 : InjectionMode.VirtualBundle;
         }
         if (body["developerMode"] is JsonValue dv && dv.TryGetValue<bool>(out var dev)) state.DeveloperMode = dev;
+        if (body["hideOnlineWhenModded"] is JsonValue hv && hv.TryGetValue<bool>(out var hideOnline)) state.HideOnlineWhenModded = hideOnline;
+        if (body["enableBuiltInTrainer"] is JsonValue tv && tv.TryGetValue<bool>(out var enableTrainer)) state.EnableBuiltInTrainer = enableTrainer;
+        if (body.ContainsKey("aiApiBaseUrl")) state.AiApiBaseUrl = Str(body, "aiApiBaseUrl").Trim();
+        if (body.ContainsKey("aiApiModel")) state.AiApiModel = Str(body, "aiApiModel").Trim();
+        if (body.ContainsKey("aiApiKey"))
+        {
+            var k = Str(body, "aiApiKey").Trim();
+            if (k != "__KEEP__") state.AiApiKey = k;
+        }
+        if (body["customCategories"] is JsonArray ccArr)
+        {
+            state.CustomCategories = ccArr
+                .Select(n => n?.GetValue<string>()?.Trim() ?? string.Empty)
+                .Where(s => s.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
         if (body.ContainsKey("language")) state.Language = Str(body, "language", "zh");
 
         engine.Repository.SaveState(state);
         InvalidateCaches();
+        if (body.ContainsKey("developerMode") || body.ContainsKey("hideOnlineWhenModded") || body.ContainsKey("enableBuiltInTrainer"))
+        {
+            TriggerHotReloadBackground("settings");
+        }
         return new JsonObject { ["ok"] = true };
     }
 
@@ -820,6 +850,139 @@ public sealed partial class DesktopApiServer : IDisposable
         return new JsonObject { ["ok"] = true };
     }
 
+    private JsonObject HandleToggleCategory(JsonObject body)
+    {
+        var engine = GetEngine();
+        var state = engine.Repository.LoadState();
+        var mods = engine.Repository.LoadMods(state);
+        var category = Str(body, "category").Trim();
+        var enabled = Bool(body, "enabled", true);
+        if (string.IsNullOrEmpty(category)) throw new ModOperationException("Category is required.");
+
+        var count = 0;
+        foreach (var m in mods)
+        {
+            var eff = ModRepository.ResolveEffectiveCategory(m.Manifest, m.Stats);
+            if (string.Equals(eff, category, StringComparison.OrdinalIgnoreCase))
+            {
+                m.Enabled = enabled;
+                count++;
+            }
+        }
+
+        engine.Repository.SaveModOrderAndFlags(mods, state);
+        TriggerHotReloadBackground($"toggle-category:{category}");
+        return new JsonObject { ["ok"] = true, ["affected"] = count };
+    }
+
+    private JsonObject HandleManageCategories(JsonObject body)
+    {
+        var engine = GetEngine();
+        var state = engine.Repository.LoadState();
+        var action = Str(body, "action", "add").Trim().ToLowerInvariant();
+        var name = Str(body, "name").Trim();
+        if (string.IsNullOrEmpty(name)) throw new ModOperationException("Category name is required.");
+
+        if (action == "remove")
+        {
+            state.CustomCategories.RemoveAll(c => string.Equals(c, name, StringComparison.OrdinalIgnoreCase));
+        }
+        else if (!ModRepository.StandardCategories.Contains(name, StringComparer.OrdinalIgnoreCase) &&
+                 !state.CustomCategories.Contains(name, StringComparer.OrdinalIgnoreCase))
+        {
+            state.CustomCategories.Add(name);
+        }
+
+        engine.Repository.SaveState(state);
+        return new JsonObject { ["ok"] = true, ["customCategories"] = ToStrArray(state.CustomCategories) };
+    }
+
+    private async Task<JsonObject> HandleOrganizeModsAsync(JsonObject body, CancellationToken ct)
+    {
+        var engine = GetEngine();
+        var state = engine.Repository.LoadState();
+        var mods = engine.Repository.LoadMods(state);
+        var conflicts = ModConflictAnalyzer.Analyze(mods);
+        var mode = Str(body, "mode", "smart").Trim().ToLowerInvariant();
+        var apply = Bool(body, "apply", false);
+
+        ModOrganizePlan plan;
+        if (body["applyItems"] is JsonArray customItems && customItems.Count > 0)
+        {
+            var byId = mods.ToDictionary(m => m.Id, StringComparer.OrdinalIgnoreCase);
+            var list = new List<ModOrganizeItem>();
+            foreach (var node in customItems)
+            {
+                if (node is not JsonObject obj) continue;
+                var id = Str(obj, "modId");
+                if (string.IsNullOrEmpty(id)) id = Str(obj, "id");
+                if (!byId.TryGetValue(id, out var m)) continue;
+                var oldCat = ModRepository.ResolveEffectiveCategory(m.Manifest, m.Stats);
+                var newCat = ModRepository.NormalizeCategory(Str(obj, "category")) ?? oldCat;
+                list.Add(new ModOrganizeItem(m.Id, m.Manifest.Name, oldCat, newCat, m.Order, list.Count, Str(obj, "reason", "已应用整理方案")));
+            }
+            plan = new ModOrganizePlan("custom", $"已应用自定义整理方案（共 {list.Count} 个 MOD）。", list, []);
+            apply = true;
+        }
+        else if (mode == "ai")
+        {
+            var apiBase = NullIfBlank(Str(body, "apiBaseUrl")) ?? state.AiApiBaseUrl;
+            var apiModel = NullIfBlank(Str(body, "model")) ?? state.AiApiModel;
+            var apiKey = NullIfBlank(Str(body, "apiKey"));
+            if (apiKey is null || apiKey == "__KEEP__") apiKey = state.AiApiKey;
+            var userPrompt = NullIfBlank(Str(body, "userPrompt"));
+
+            // Save AI settings if provided
+            if (Bool(body, "saveAiConfig", false))
+            {
+                state.AiApiBaseUrl = apiBase ?? string.Empty;
+                state.AiApiModel = apiModel ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(apiKey)) state.AiApiKey = apiKey;
+                engine.Repository.SaveState(state);
+            }
+
+            plan = await ModOrganizer.BuildAiPlanAsync(mods, conflicts, apiBase ?? "", apiKey ?? "", apiModel ?? "", userPrompt, ct);
+        }
+        else
+        {
+            var preserveCustom = Bool(body, "preserveCustom", true);
+            plan = ModOrganizer.BuildLocalSmartPlan(mods, conflicts, preserveCustom);
+        }
+
+        if (apply)
+        {
+            ModOrganizer.ApplyPlan(engine.Repository, plan);
+            InvalidateStudioCache();
+            EmitLog(LogLevel.Ok, $"[MOD 整理] {plan.Summary}");
+            TriggerHotReloadBackground("organize");
+        }
+
+        var itemsArr = new JsonArray();
+        foreach (var it in plan.Items)
+        {
+            itemsArr.Add((JsonNode?)new JsonObject
+            {
+                ["modId"] = it.ModId,
+                ["modName"] = it.ModName,
+                ["oldCategory"] = it.OldCategory,
+                ["newCategory"] = it.NewCategory,
+                ["oldOrder"] = it.OldOrder,
+                ["newOrder"] = it.NewOrder,
+                ["reason"] = it.Reason
+            });
+        }
+
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["applied"] = apply,
+            ["mode"] = plan.Mode,
+            ["summary"] = plan.Summary,
+            ["items"] = itemsArr,
+            ["suggestedCustomCategories"] = ToStrArray(plan.SuggestedCustomCategories)
+        };
+    }
+
     private JsonObject HandleReorderMods(JsonObject body)
     {
         var engine = GetEngine();
@@ -933,6 +1096,8 @@ public sealed partial class DesktopApiServer : IDisposable
                 BuildOnlyDir = NullIfBlank(Str(body, "buildOnlyDir")),
                 LaunchGameAfter = launchAfter && hasExe,
                 DeveloperModeOverride = body["developerMode"] is JsonValue dv && dv.TryGetValue<bool>(out var dev) ? dev : null,
+                HideOnlineWhenModdedOverride = body["hideOnlineWhenModded"] is JsonValue hv && hv.TryGetValue<bool>(out var ho) ? ho : null,
+                EnableBuiltInTrainerOverride = body["enableBuiltInTrainer"] is JsonValue tv && tv.TryGetValue<bool>(out var et) ? et : null,
                 IgnoreVersionRequirements = Bool(body, "ignoreVersion", false),
                 AssumeYes = true,
                 ForceKillRunningGame = true,

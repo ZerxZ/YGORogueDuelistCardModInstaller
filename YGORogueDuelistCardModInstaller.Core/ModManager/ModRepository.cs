@@ -1079,15 +1079,19 @@ public sealed partial class ModRepository
     public static string? NormalizeCategory(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw)) return null;
-        var norm = raw.Trim().ToLowerInvariant();
-        return norm is "auto" or "all" ? null : norm;
+        var trimmed = raw.Trim();
+        var lower = trimmed.ToLowerInvariant();
+        if (lower is "auto" or "all") return null;
+        return StandardCategories.Contains(lower, StringComparer.OrdinalIgnoreCase) ? lower : trimmed;
     }
 
     public static string ResolveEffectiveCategory(ModManifest manifest, ModContentStats stats)
     {
         if (!string.IsNullOrWhiteSpace(manifest.Category))
         {
-            return manifest.Category.Trim().ToLowerInvariant();
+            var trimmed = manifest.Category.Trim();
+            var lower = trimmed.ToLowerInvariant();
+            return StandardCategories.Contains(lower, StringComparer.OrdinalIgnoreCase) ? lower : trimmed;
         }
 
         var domains = (stats.CardCount > 0 ? 1 : 0)

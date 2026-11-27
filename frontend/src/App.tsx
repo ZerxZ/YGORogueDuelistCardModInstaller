@@ -82,7 +82,7 @@ export function App() {
   const [activeWsId, setActiveWsId] = useState<string>('');
   const [lang, setLang] = useState<Lang>('zh');
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
-  const [tab, setTab] = useState<TabKey>('studio');
+  const [tab, setTab] = useState<TabKey>('library');
   const [activeModId, setActiveModId] = useState<string>('');
 
   // IDE Pane Toggles (Pinned 3-pane on desktop >= 1024px; slide-over drawers on narrow/mobile!)
@@ -280,6 +280,12 @@ export function App() {
     }
   };
 
+  useEffect(() => {
+    if (status && !status.developerMode && (tab === 'studio' || tab === 'vanilla' || tab === 'mcp')) {
+      setTab('library');
+    }
+  }, [status?.developerMode, tab]);
+
   const handleApply = async (launchAfter: boolean) => {
     if (!status) return;
     setBusyOp(true);
@@ -288,6 +294,8 @@ export function App() {
       await apiPost('/api/apply', {
         mode: status.mode,
         developerMode: status.developerMode,
+        hideOnlineWhenModded: status.hideOnlineWhenModded,
+        enableBuiltInTrainer: status.enableBuiltInTrainer,
         launchAfter,
       });
       await refreshAll();
@@ -665,42 +673,44 @@ export function App() {
                 </Select>
               </div>
 
-              <div>
-                <div className="mb-1 flex items-center justify-between px-0.5 text-[10px] font-medium uppercase tracking-wider text-muted">
-                  <span>{t.activeMod}</span>
-                  <button
-                    type="button"
-                    onClick={() => setShowNewMod(true)}
-                    title={t.newMod}
-                    className="rounded p-0.5 text-muted hover:bg-surface-secondary hover:text-foreground"
+              {status.developerMode && (
+                <div>
+                  <div className="mb-1 flex items-center justify-between px-0.5 text-[10px] font-medium uppercase tracking-wider text-muted">
+                    <span>{t.activeMod}</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowNewMod(true)}
+                      title={t.newMod}
+                      className="rounded p-0.5 text-muted hover:bg-surface-secondary hover:text-foreground"
+                    >
+                      <Plus className="size-3" />
+                    </button>
+                  </div>
+                  <Select
+                    aria-label={t.activeMod}
+                    fullWidth
+                    variant="secondary"
+                    placeholder={t.noModPlaceholder}
+                    value={activeModId || null}
+                    onChange={(k) => k && setActiveModId(String(k))}
                   >
-                    <Plus className="size-3" />
-                  </button>
+                    <Select.Trigger className="h-7 text-xs font-medium">
+                      <Select.Value />
+                      <Select.Indicator />
+                    </Select.Trigger>
+                    <Select.Popover>
+                      <ListBox>
+                        {status.mods.map((m) => (
+                          <ListBox.Item key={m.id} id={m.id} textValue={m.name}>
+                            {m.name}
+                            <ListBox.ItemIndicator />
+                          </ListBox.Item>
+                        ))}
+                      </ListBox>
+                    </Select.Popover>
+                  </Select>
                 </div>
-                <Select
-                  aria-label={t.activeMod}
-                  fullWidth
-                  variant="secondary"
-                  placeholder={t.noModPlaceholder}
-                  value={activeModId || null}
-                  onChange={(k) => k && setActiveModId(String(k))}
-                >
-                  <Select.Trigger className="h-7 text-xs font-medium">
-                    <Select.Value />
-                    <Select.Indicator />
-                  </Select.Trigger>
-                  <Select.Popover>
-                    <ListBox>
-                      {status.mods.map((m) => (
-                        <ListBox.Item key={m.id} id={m.id} textValue={m.name}>
-                          {m.name}
-                          <ListBox.ItemIndicator />
-                        </ListBox.Item>
-                      ))}
-                    </ListBox>
-                  </Select.Popover>
-                </Select>
-              </div>
+              )}
             </div>
 
             {/* Vertical Navigation Tree */}
@@ -713,62 +723,66 @@ export function App() {
                 count={`${enabledCount}/${status.mods.length}`}
               />
 
-              <SidebarNavItem
-                active={tab === 'studio'}
-                onClick={() => setTab('studio')}
-                icon={<Palette className="size-3.5" />}
-                label={t.tabStudio}
-              />
-              {tab === 'studio' && (
-                <div className="ml-3.5 border-l border-border/80 pl-2 space-y-0.5 py-0.5">
-                  {studioCategories.map((c) => (
-                    <button
-                      key={c.key}
-                      type="button"
-                      onClick={() => setStudioCategory(c.key)}
-                      className={`flex w-full items-center justify-between rounded-md px-2 py-1 text-xs transition-colors ${
-                        studioCategory === c.key
-                          ? 'bg-accent/15 text-accent font-medium'
-                          : 'text-muted hover:bg-surface-secondary hover:text-foreground'
-                      }`}
-                    >
-                      <span className="flex items-center gap-1.5 truncate">
-                        {c.icon}
-                        <span className="truncate">{c.label}</span>
-                      </span>
-                      <span className="font-mono text-[10px] opacity-80">{studioCounts[c.key] ?? 0}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
+              {status.developerMode && (
+                <>
+                  <SidebarNavItem
+                    active={tab === 'studio'}
+                    onClick={() => setTab('studio')}
+                    icon={<Palette className="size-3.5" />}
+                    label={t.tabStudio}
+                  />
+                  {tab === 'studio' && (
+                    <div className="ml-3.5 border-l border-border/80 pl-2 space-y-0.5 py-0.5">
+                      {studioCategories.map((c) => (
+                        <button
+                          key={c.key}
+                          type="button"
+                          onClick={() => setStudioCategory(c.key)}
+                          className={`flex w-full items-center justify-between rounded-md px-2 py-1 text-xs transition-colors ${
+                            studioCategory === c.key
+                              ? 'bg-accent/15 text-accent font-medium'
+                              : 'text-muted hover:bg-surface-secondary hover:text-foreground'
+                          }`}
+                        >
+                          <span className="flex items-center gap-1.5 truncate">
+                            {c.icon}
+                            <span className="truncate">{c.label}</span>
+                          </span>
+                          <span className="font-mono text-[10px] opacity-80">{studioCounts[c.key] ?? 0}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
 
-              <SidebarNavItem
-                active={tab === 'vanilla'}
-                onClick={() => setTab('vanilla')}
-                icon={<BookOpen className="size-3.5" />}
-                label={t.tabVanilla}
-              />
-              {tab === 'vanilla' && (
-                <div className="ml-3.5 border-l border-border/80 pl-2 space-y-0.5 py-0.5">
-                  {vanillaCategories.map((c) => (
-                    <button
-                      key={c.key}
-                      type="button"
-                      onClick={() => setVanillaCategory(c.key)}
-                      className={`flex w-full items-center justify-between rounded-md px-2 py-1 text-xs transition-colors ${
-                        vanillaCategory === c.key
-                          ? 'bg-accent/15 text-accent font-medium'
-                          : 'text-muted hover:bg-surface-secondary hover:text-foreground'
-                      }`}
-                    >
-                      <span className="flex items-center gap-1.5 truncate">
-                        {c.icon}
-                        <span className="truncate">{c.label}</span>
-                      </span>
-                      <span className="font-mono text-[10px] opacity-80">{vanillaCounts[c.key] ?? 0}</span>
-                    </button>
-                  ))}
-                </div>
+                  <SidebarNavItem
+                    active={tab === 'vanilla'}
+                    onClick={() => setTab('vanilla')}
+                    icon={<BookOpen className="size-3.5" />}
+                    label={t.tabVanilla}
+                  />
+                  {tab === 'vanilla' && (
+                    <div className="ml-3.5 border-l border-border/80 pl-2 space-y-0.5 py-0.5">
+                      {vanillaCategories.map((c) => (
+                        <button
+                          key={c.key}
+                          type="button"
+                          onClick={() => setVanillaCategory(c.key)}
+                          className={`flex w-full items-center justify-between rounded-md px-2 py-1 text-xs transition-colors ${
+                            vanillaCategory === c.key
+                              ? 'bg-accent/15 text-accent font-medium'
+                              : 'text-muted hover:bg-surface-secondary hover:text-foreground'
+                          }`}
+                        >
+                          <span className="flex items-center gap-1.5 truncate">
+                            {c.icon}
+                            <span className="truncate">{c.label}</span>
+                          </span>
+                          <span className="font-mono text-[10px] opacity-80">{vanillaCounts[c.key] ?? 0}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
 
               <SidebarNavItem
@@ -779,14 +793,16 @@ export function App() {
                 liveDot={status.hotReload.running}
               />
 
-              <SidebarNavItem
-                active={tab === 'mcp'}
-                onClick={() => setTab('mcp')}
-                icon={<Bot className="size-3.5" />}
-                label={t.tabMcp}
-                count={String(status.mcpToolCount || 21)}
-                liveDot={true}
-              />
+              {status.developerMode && (
+                <SidebarNavItem
+                  active={tab === 'mcp'}
+                  onClick={() => setTab('mcp')}
+                  icon={<Bot className="size-3.5" />}
+                  label={t.tabMcp}
+                  count={String(status.mcpToolCount || 22)}
+                  liveDot={true}
+                />
+              )}
 
               <SidebarNavItem
                 active={tab === 'settings'}
@@ -889,6 +905,38 @@ export function App() {
 
               <Switch
                 size="sm"
+                isSelected={status.enableBuiltInTrainer !== false}
+                onChange={async (checked) => {
+                  await apiPost('/api/settings', { enableBuiltInTrainer: checked });
+                  await refreshAll();
+                }}
+              >
+                <Switch.Content>
+                  <Switch.Control>
+                    <Switch.Thumb />
+                  </Switch.Control>
+                  <span className="text-[11px] text-foreground/90">{t.trainerSwitchLabel}</span>
+                </Switch.Content>
+              </Switch>
+
+              <Switch
+                size="sm"
+                isSelected={status.hideOnlineWhenModded !== false}
+                onChange={async (checked) => {
+                  await apiPost('/api/settings', { hideOnlineWhenModded: checked });
+                  await refreshAll();
+                }}
+              >
+                <Switch.Content>
+                  <Switch.Control>
+                    <Switch.Thumb />
+                  </Switch.Control>
+                  <span className="text-[11px] text-foreground/90">{t.hideOnlineSwitchLabel}</span>
+                </Switch.Content>
+              </Switch>
+
+              <Switch
+                size="sm"
                 isSelected={status.developerMode}
                 onChange={async (checked) => {
                   await apiPost('/api/settings', { developerMode: checked });
@@ -960,6 +1008,7 @@ export function App() {
               <ModLibraryTab
                 status={status}
                 t={t}
+                lang={lang}
                 selectedModId={activeModId}
                 inspectorOpen={inspectorOpen}
                 onSelectMod={setActiveModId}

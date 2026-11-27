@@ -112,6 +112,12 @@ export interface ManagerStatus {
   launcherBuild: number;
   mode: 'VirtualBundle' | 'LauncherManifest';
   developerMode: boolean;
+  hideOnlineWhenModded: boolean;
+  enableBuiltInTrainer: boolean;
+  customCategories: string[];
+  aiApiBaseUrl: string;
+  aiApiModel: string;
+  hasAiApiKey: boolean;
   language: Lang;
   syncState: string;
   syncSummary: string;

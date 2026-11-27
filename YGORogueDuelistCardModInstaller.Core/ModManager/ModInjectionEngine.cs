@@ -202,7 +202,13 @@ public sealed partial class ModInjectionEngine
         var virtualVersions = FindInstalledVirtualVersions(gameBaseDir);
         var hasBackup = File.Exists(Path.Combine(Repository.BackupDir, "launcher.dll"));
 
-        var fingerprint = ModCompositor.ComputeConfigurationFingerprint(state.InjectionMode, baseVersion, mods, state.DeveloperMode);
+        var fingerprint = ModCompositor.ComputeConfigurationFingerprint(
+            state.InjectionMode,
+            baseVersion,
+            mods,
+            state.DeveloperMode,
+            state.HideOnlineWhenModded,
+            state.EnableBuiltInTrainer);
         var versionIssues = ModRepository.EvaluateVersionIssues(mods, baseVersion);
         var (syncState, syncSummary) = EvaluateSyncState(state, baseVersion, fingerprint, virtualVersions, mods);
 
@@ -215,6 +221,8 @@ public sealed partial class ModInjectionEngine
             launcherMeta,
             state.InjectionMode,
             state.DeveloperMode,
+            state.HideOnlineWhenModded,
+            state.EnableBuiltInTrainer,
             syncState,
             syncSummary,
             fingerprint,
@@ -322,9 +330,11 @@ public sealed partial class ModInjectionEngine
 
         var enabledMods = mods.Where(m => m.Enabled).OrderBy(m => m.Order).ToList();
         var developerMode = options.DeveloperModeOverride ?? state.DeveloperMode;
-        if (enabledMods.Count == 0 && !developerMode && !isBuildOnly)
+        var hideOnlineWhenModded = options.HideOnlineWhenModdedOverride ?? state.HideOnlineWhenModded;
+        var enableBuiltInTrainer = options.EnableBuiltInTrainerOverride ?? state.EnableBuiltInTrainer;
+        if (enabledMods.Count == 0 && !developerMode && !enableBuiltInTrainer && !isBuildOnly)
         {
-            interaction.Say("当前没有启用任何 MOD，正在还原为纯净原版...");
+            interaction.Say("当前没有启用任何 MOD 与内置修改器，正在还原为纯净原版...");
             await RestoreVanillaAsync(interaction, forceKillRunningGame: options.ForceKillRunningGame, cancellationToken);
             if (options.LaunchGameAfter)
             {
@@ -367,7 +377,16 @@ public sealed partial class ModInjectionEngine
 
         interaction.ReportProgress("正在从纯净原版合成 MOD...", 8);
         var composed = await Task.Run(
-            () => ModCompositor.Compose(vanilla.ZipPath, mods, picsDir, interaction, cancellationToken, developerMode, options.HotReloadPort),
+            () => ModCompositor.Compose(
+                vanilla.ZipPath,
+                mods,
+                picsDir,
+                interaction,
+                cancellationToken,
+                developerMode,
+                options.HotReloadPort,
+                hideOnlineWhenModded,
+                enableBuiltInTrainer),
             cancellationToken);
 
         if (composed.Files.Count == 0)
@@ -441,9 +460,17 @@ public sealed partial class ModInjectionEngine
         GameLocator.ClearWebViewCache();
         interaction.Ok("已清除游戏网页缓存");
 
-        var fingerprint = ModCompositor.ComputeConfigurationFingerprint(mode, vanilla.Version, mods, developerMode);
+        var fingerprint = ModCompositor.ComputeConfigurationFingerprint(
+            mode,
+            vanilla.Version,
+            mods,
+            developerMode,
+            hideOnlineWhenModded,
+            enableBuiltInTrainer);
         state.InjectionMode = mode;
         state.DeveloperMode = developerMode;
+        state.HideOnlineWhenModded = hideOnlineWhenModded;
+        state.EnableBuiltInTrainer = enableBuiltInTrainer;
         state.LastInjection = new LastInjectionRecord
         {
             Mode = mode,
@@ -871,7 +898,15 @@ public sealed partial class ModInjectionEngine
 
         var virtualVersion = ComputeVirtualVersion(vanilla.Version);
         interaction.ReportProgress($"正在合成 Linux 虚拟版本包 ({virtualVersion})...", 20);
-        var composed = ModCompositor.Compose(vanilla.ZipPath, mods, picsDir, interaction, cancellationToken, state.DeveloperMode);
+        var composed = ModCompositor.Compose(
+            vanilla.ZipPath,
+            mods,
+            picsDir,
+            interaction,
+            cancellationToken,
+            state.DeveloperMode,
+            hideOnlineWhenModded: state.HideOnlineWhenModded,
+            enableBuiltInTrainer: state.EnableBuiltInTrainer);
         ValidateBundleFileAllowlist(composed.Files.Keys);
 
         Directory.CreateDirectory(outputDir);
@@ -958,7 +993,15 @@ public sealed partial class ModInjectionEngine
             ?? throw new ModOperationException("找不到原版 web-X.Y.Z.zip，无法导出 Android MOD 包。");
 
         interaction.ReportProgress("正在合成 Android MOD 网页资源层...", 25);
-        var composed = ModCompositor.Compose(vanilla.ZipPath, mods, picsDir, interaction, cancellationToken, state.DeveloperMode);
+        var composed = ModCompositor.Compose(
+            vanilla.ZipPath,
+            mods,
+            picsDir,
+            interaction,
+            cancellationToken,
+            state.DeveloperMode,
+            hideOnlineWhenModded: state.HideOnlineWhenModded,
+            enableBuiltInTrainer: state.EnableBuiltInTrainer);
         ValidateBundleFileAllowlist(composed.Files.Keys);
         Directory.CreateDirectory(outputDir);
 

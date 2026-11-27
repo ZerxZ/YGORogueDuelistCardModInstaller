@@ -10,11 +10,12 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Import-Only Android MOD Loader Activity.
- * Clean, lightweight mobile UI focused exclusively on:
- *   1) Importing MODs (.zip / .ypk / Desktop Studio Android Overlay .zip / Workspace Modpacks)
- *   2) Downloading or importing base game web-*.zip
- *   3) Enabling, reordering, applying/restoring, and launching the full-screen modded game!
+ * Android Player MOD Loader & Built-in Trainer Manager Activity (No MOD Editor).
+ * Provides:
+ *   1) Categorized MOD Checklist with manual & 1-click smart organize (.yrdpk / .zip / .ypk)
+ *   2) Built-in Touch-Friendly In-Game Trainer (修改器) & Gameplay Safety Settings
+ *   3) Landscape / Portrait / Auto screen orientation selector
+ *   4) Hide Online Multiplayer when playing with MODs (with toggle + 1-tap Pure Vanilla launch!)
  */
 public final class LoaderActivity extends Activity {
     private static final int REQ_PICK_MOD = 5101;
@@ -137,13 +138,39 @@ public final class LoaderActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void setBoolSetting(String key, boolean value) {
+            ioPool.execute(() -> {
+                try {
+                    JSONObject st = store.loadState();
+                    st.put(key, value);
+                    store.saveState(st);
+                    emitToUi("onRefresh", store.getStatusJson());
+                } catch (Exception ignored) {}
+            });
+        }
+
+        @JavascriptInterface
+        public void setTrainerConfig(String jsonStr) {
+            ioPool.execute(() -> {
+                try {
+                    JSONObject st = store.loadState();
+                    st.put("trainerConfig", new JSONObject(jsonStr));
+                    store.saveState(st);
+                    emitToUi("onRefresh", store.getStatusJson());
+                } catch (Exception e) {
+                    emitToast("err", e.getMessage());
+                }
+            });
+        }
+
+        @JavascriptInterface
         public void pickImportMod() {
             runOnUiThread(() -> {
                 Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                 i.addCategory(Intent.CATEGORY_OPENABLE);
                 i.setType("*/*");
                 try {
-                    startActivityForResult(Intent.createChooser(i, "Select MOD (.zip / .ypk)"), REQ_PICK_MOD);
+                    startActivityForResult(Intent.createChooser(i, "Select MOD (.yrdpk / .zip / .ypk)"), REQ_PICK_MOD);
                 } catch (Exception e) {
                     emitToast("err", "No file picker available.");
                 }
@@ -193,6 +220,55 @@ public final class LoaderActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void toggleCategory(String category, boolean enabled) {
+            ioPool.execute(() -> {
+                try {
+                    store.toggleCategory(category, enabled);
+                    emitToUi("onRefresh", store.getStatusJson());
+                } catch (Exception e) {
+                    emitToast("err", e.getMessage());
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void setModCategory(String id, String category) {
+            ioPool.execute(() -> {
+                try {
+                    store.setModCategory(id, category);
+                    emitToUi("onRefresh", store.getStatusJson());
+                } catch (Exception e) {
+                    emitToast("err", e.getMessage());
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void addCustomCategory(String name) {
+            ioPool.execute(() -> {
+                try {
+                    store.addCustomCategory(name);
+                    emitToUi("onRefresh", store.getStatusJson());
+                } catch (Exception e) {
+                    emitToast("err", e.getMessage());
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void smartOrganize() {
+            ioPool.execute(() -> {
+                try {
+                    int n = store.smartOrganizeMods();
+                    emitToast("ok", "Smart organized " + n + " MOD(s)!");
+                    emitToUi("onRefresh", store.getStatusJson());
+                } catch (Exception e) {
+                    emitToast("err", e.getMessage());
+                }
+            });
+        }
+
+        @JavascriptInterface
         public void moveMod(String id, int delta) {
             ioPool.execute(() -> {
                 try {
@@ -222,7 +298,7 @@ public final class LoaderActivity extends Activity {
             ioPool.execute(() -> {
                 try {
                     int n = ModComposerLite.composeAll(store, LoaderActivity.this::emitProgress);
-                    emitToast("ok", n > 0 ? ("Applied " + n + " MOD(s)!") : "Running clean vanilla.");
+                    emitToast("ok", n > 0 ? ("Applied " + n + " MOD(s)!") : "Ready to launch!");
                     emitToUi("onRefresh", store.getStatusJson());
                     if (launchAfter) {
                         runOnUiThread(() -> startActivity(new Intent(LoaderActivity.this, GameActivity.class)));
@@ -243,6 +319,19 @@ public final class LoaderActivity extends Activity {
                 } catch (Exception e) {
                     emitToast("err", e.getMessage());
                 }
+            });
+        }
+
+        @JavascriptInterface
+        public void launchVanilla() {
+            if (!store.getVanillaZip().isFile()) {
+                emitToast("err", "Please download or import web-*.zip first.");
+                return;
+            }
+            runOnUiThread(() -> {
+                Intent i = new Intent(LoaderActivity.this, GameActivity.class);
+                i.putExtra("forceVanilla", true);
+                startActivity(i);
             });
         }
 
