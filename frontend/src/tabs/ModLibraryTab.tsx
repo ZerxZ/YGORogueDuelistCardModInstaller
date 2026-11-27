@@ -8,10 +8,12 @@ import {
   Input,
   Label,
   ListBox,
+  Modal,
   Select,
   Separator,
   Surface,
   Switch,
+  TextArea,
   TextField,
 } from '@heroui/react';
 import {
@@ -178,7 +180,7 @@ export function ModLibraryTab({
   status,
   t,
   selectedModId,
-  inspectorOpen,
+  inspectorOpen: _inspectorOpen,
   onSelectMod,
   onRefresh,
   onOpenInStudio,
@@ -201,7 +203,8 @@ export function ModLibraryTab({
   const [coverDropHover, setCoverDropHover] = useState(false);
   const externalDragDepthRef = useRef(0);
 
-  // Inline Inspector Metadata Editor
+  // Modal Window Detail / Metadata Editor (replaces cramped right sidebar!)
+  const [detailModalOpen, setDetailModalOpen] = useState(false);
   const [editingMeta, setEditingMeta] = useState(false);
   const [metaForm, setMetaForm] = useState({
     name: '',
@@ -335,32 +338,40 @@ export function ModLibraryTab({
       onNotify(fmt(t.toastImportedMod, { name: res.name }), 'ok');
     });
 
-  const handlePackWorkspace = () =>
+  const handlePackWorkspace = (format: 'yrdpk' | 'zip' = 'yrdpk') =>
     runAction(async () => {
       const save = await apiPost<{ path: string | null }>('/api/dialog/save-zip', {
         title: t.packWorkspace,
-        suggestedName: `ygo-modpack-v${status.activeBaseGameVersion ?? '1.0.0'}.yrdpk`,
+        suggestedName: `ygo-modpack-v${status.activeBaseGameVersion ?? '1.0.0'}.${format}`,
       });
       if (!save.path) return;
-      const res = await apiPost<{ zipPath: string; modCount: number }>('/api/workspace/pack', {
+      const res = await apiPost<{ zipPath: string; outputDir?: string; modCount: number }>('/api/workspace/pack', {
         outputPath: save.path,
+        format,
         enabledOnly: false,
       });
       onNotify(fmt(t.toastPackedWs, { count: res.modCount, path: res.zipPath }), 'ok');
+      if (res.outputDir) {
+        apiPost('/api/shell/open-folder', { path: res.outputDir }).catch(() => {});
+      }
     });
 
-  const handlePackSingle = (mod: ModEntry) =>
+  const handlePackSingle = (mod: ModEntry, format: 'yrdpk' | 'zip' = 'yrdpk') =>
     runAction(async () => {
       const save = await apiPost<{ path: string | null }>('/api/dialog/save-zip', {
-        title: t.packZip,
-        suggestedName: `${mod.id}-v${mod.version}.yrdpk`,
+        title: `${t.packZip} (.${format})`,
+        suggestedName: `${mod.id}-v${mod.version}.${format}`,
       });
       if (!save.path) return;
-      const res = await apiPost<{ zipPath: string }>('/api/mods/pack', {
+      const res = await apiPost<{ zipPath: string; outputDir?: string }>('/api/mods/pack', {
         modId: mod.id,
         outputPath: save.path,
+        format,
       });
       onNotify(fmt(t.toastPackedMod, { name: mod.name, path: res.zipPath }), 'ok');
+      if (res.outputDir) {
+        apiPost('/api/shell/open-folder', { path: res.outputDir }).catch(() => {});
+      }
     });
 
   const handleToggle = (modId: string, enabled: boolean) =>
@@ -662,7 +673,7 @@ export function ModLibraryTab({
             size="sm"
             variant="secondary"
             isDisabled={busyAction || status.mods.length === 0}
-            onPress={handlePackWorkspace}
+            onPress={() => handlePackWorkspace('yrdpk')}
             className="h-7 shrink-0 text-xs"
           >
             <Archive className="size-3.5 text-warning" />
@@ -824,7 +835,10 @@ export function ModLibraryTab({
                     setDropTargetModId(null);
                     setDropTargetCategory(null);
                   }}
-                  onClick={() => onSelectMod(mod.id)}
+                  onClick={() => {
+                    onSelectMod(mod.id);
+                    setDetailModalOpen(true);
+                  }}
                   className={`group relative flex cursor-pointer items-center gap-2.5 rounded-xl border px-2.5 py-2 transition-all ${
                     isDragging ? 'opacity-45 scale-[0.99]' : ''
                   } ${
@@ -924,9 +938,40 @@ export function ModLibraryTab({
 
                   {/* Row Actions */}
                   <div
-                    className="flex shrink-0 items-center gap-1 opacity-75 group-hover:opacity-100"
+                    className="flex shrink-0 items-center gap-1 opacity-85 group-hover:opacity-100"
                     onClick={(e) => e.stopPropagation()}
                   >
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onPress={() => {
+                        onSelectMod(mod.id);
+                        setDetailModalOpen(true);
+                      }}
+                      className="h-7 px-2 text-[11px]"
+                    >
+                      <Info className="size-3 text-accent" />
+                      <span className="hidden sm:inline">{t.editMetadata}</span>
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onPress={() => onOpenInStudio(mod.id)}
+                      className="h-7 px-2 text-[11px]"
+                    >
+                      <Palette className="size-3 text-accent" />
+                      <span className="hidden md:inline">{t.editInStudio}</span>
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      isDisabled={busyAction}
+                      onPress={() => handlePackSingle(mod, 'yrdpk')}
+                      className="h-7 px-2 text-[11px]"
+                    >
+                      <Archive className="size-3 text-warning" />
+                      <span className="hidden lg:inline">.yrdpk</span>
+                    </Button>
                     <Button
                       isIconOnly
                       size="sm"
@@ -965,482 +1010,477 @@ export function ModLibraryTab({
               );
             })
           )}
+
+          {/* Compact Conflict & Version Status Footer inside Main Full-Width List */}
+          {(status.versionIssues.length > 0 || status.conflicts.length > 0) && (
+            <div className="mt-3 space-y-2">
+              {status.versionIssues.length > 0 && (
+                <Alert status="danger">
+                  <Alert.Indicator />
+                  <Alert.Content>
+                    <Alert.Title className="text-xs">
+                      {t.versionIssuesTitle} ({status.versionIssues.length})
+                    </Alert.Title>
+                    <Alert.Description>
+                      <ul className="mt-1 space-y-1 text-[11px]">
+                        {status.versionIssues.map((v, i) => (
+                          <li key={`${v.modId}-${i}`}>
+                            <span className="font-semibold">{v.modName}:</span> {v.message}
+                          </li>
+                        ))}
+                      </ul>
+                    </Alert.Description>
+                  </Alert.Content>
+                </Alert>
+              )}
+              {status.conflicts.length > 0 && (
+                <Alert status="warning">
+                  <Alert.Indicator />
+                  <Alert.Content>
+                    <Alert.Title className="text-xs">
+                      {t.conflictsTitle} ({status.conflicts.length})
+                    </Alert.Title>
+                    <Alert.Description>
+                      <div className="mt-1.5 max-h-40 overflow-y-auto space-y-1 pr-1">
+                        {status.conflicts.map((c, i) => (
+                          <div
+                            key={`${c.category}-${c.resourceKey}-${i}`}
+                            className="rounded-lg border border-warning/25 bg-surface/60 px-2 py-1 text-[11px]"
+                          >
+                            <span className="font-mono font-semibold text-foreground">
+                              [{c.category}] {c.resourceKey}
+                            </span>{' '}
+                            <span className="text-muted">
+                              ({c.modIds.join(' → ')} · {t.conflictWinner}: <b className="text-success">{c.winnerModId}</b>)
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </Alert.Description>
+                  </Alert.Content>
+                </Alert>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Right Collapsible Inspector Drawer */}
-      {inspectorOpen && (
-        <aside className="fixed inset-y-0 top-10 right-0 z-20 flex w-full max-w-[430px] shrink-0 flex-col gap-3 overflow-y-auto border-l border-border bg-background p-3.5 shadow-2xl lg:static lg:z-auto lg:w-[390px] lg:max-w-none lg:bg-surface/40 lg:shadow-none xl:w-[430px]">
-          {selectedMod && (
-            <>
-              <Card variant="default" className="overflow-hidden p-0 gap-0">
-                {/* Interactive Cover Banner (Click or Drag-Drop Image to Set Cover!) */}
-                <div
-                  onClick={() => handlePickCover(selectedMod)}
-                  onDragOver={(e) => {
-                    if (!e.dataTransfer.types.includes('Files')) return;
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setCoverDropHover(true);
-                  }}
-                  onDragLeave={() => setCoverDropHover(false)}
-                  onDrop={(e) => handleCoverBannerDrop(e, selectedMod)}
-                  className={`group/cover relative h-32 w-full cursor-pointer overflow-hidden border-b border-border/80 bg-gradient-to-br from-surface-secondary via-background to-accent-soft/25 transition-all ${
-                    coverDropHover ? 'ring-2 ring-inset ring-accent' : ''
-                  }`}
-                >
-                  {selectedMod.coverUrl ? (
-                    <img
-                      src={resolveApiUrl(selectedMod.coverUrl)}
-                      alt={selectedMod.name}
-                      className="h-full w-full object-cover transition-transform duration-300 group-hover/cover:scale-[1.03]"
-                    />
-                  ) : (
-                    <div className="flex h-full w-full flex-col items-center justify-center gap-1.5 text-muted/70">
-                      <ImagePlus className="size-7 text-accent/70" />
-                      <span className="text-[11px]">{t.dropCoverHint}</span>
-                    </div>
-                  )}
-
-                  {/* Cover Action Overlay */}
-                  <div
-                    className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-gradient-to-t from-black/80 via-black/45 to-transparent px-3 py-2"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <Chip size="sm" color={getCategoryAccent(selectedMod.effectiveCategory)} variant="primary" className="h-5">
-                      <Chip.Label className="text-[10px]">
-                        {getModCategoryLabel(selectedMod.effectiveCategory, t)}
-                      </Chip.Label>
-                    </Chip>
-                    <div className="flex items-center gap-1">
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        isDisabled={busyAction}
-                        onPress={() => handlePickCover(selectedMod)}
-                        className="h-6 px-2 text-[11px]"
-                      >
-                        <ImagePlus className="size-3" />
-                        {t.changeCover}
-                      </Button>
-                      {selectedMod.cover && (
-                        <Button
-                          size="sm"
-                          variant="danger-soft"
-                          isDisabled={busyAction}
-                          onPress={() => handleClearCover(selectedMod)}
-                          className="h-6 px-1.5 text-[11px]"
-                        >
-                          <X className="size-3" />
-                        </Button>
+      {/* SPACIOUS 900px MODAL WINDOW: MOD Details, Cover, Metadata Editor, Pack (.yrdpk/.zip) & Entries */}
+      <Modal.Backdrop isOpen={detailModalOpen && Boolean(selectedMod)} onOpenChange={setDetailModalOpen}>
+        <Modal.Container placement="center" size="lg">
+          <Modal.Dialog className="sm:max-w-[900px] max-h-[88vh] flex flex-col">
+            <Modal.CloseTrigger />
+            {selectedMod && (
+              <>
+                <Modal.Header className="pb-2">
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="flex flex-wrap items-center gap-2 pr-6">
+                      <Modal.Heading className="truncate text-base">{selectedMod.name}</Modal.Heading>
+                      <Chip size="sm" color="accent" variant="soft" className="h-5">
+                        <Chip.Label className="font-mono text-[10px]">ID: {selectedMod.id}</Chip.Label>
+                      </Chip>
+                      <Chip size="sm" variant="soft" className="h-5">
+                        <Chip.Label className="font-mono text-[10px]">v{selectedMod.version}</Chip.Label>
+                      </Chip>
+                      {selectedMod.gameVersion && (
+                        <Chip size="sm" color="success" variant="soft" className="h-5">
+                          {t.badgeGameVer} {selectedMod.gameVersion}
+                        </Chip>
+                      )}
+                      {selectedMod.minGameVersion && (
+                        <Chip size="sm" color="warning" variant="soft" className="h-5">
+                          {t.badgeMinVer} {selectedMod.minGameVersion}
+                        </Chip>
                       )}
                     </div>
+                    <p className="text-xs text-muted">
+                      {t.authorLabel}: {selectedMod.author || t.authorCommunity}
+                    </p>
                   </div>
-                </div>
+                </Modal.Header>
 
-                <div className="p-3.5 space-y-3">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <Chip size="sm" color="accent" variant="soft">
-                      <Chip.Label className="font-mono text-[10px]">ID: {selectedMod.id}</Chip.Label>
-                    </Chip>
-                    <Chip size="sm" variant="soft">
-                      <Chip.Label className="font-mono text-[10px]">v{selectedMod.version}</Chip.Label>
-                    </Chip>
-                    {selectedMod.gameVersion && (
-                      <Chip size="sm" color="success" variant="soft">
-                        {t.badgeGameVer} {selectedMod.gameVersion}
-                      </Chip>
-                    )}
-                    {selectedMod.minGameVersion && (
-                      <Chip size="sm" color="warning" variant="soft">
-                        {t.badgeMinVer} {selectedMod.minGameVersion}
-                      </Chip>
-                    )}
-                  </div>
-
-                  {!editingMeta ? (
-                    <>
-                      <Card.Header className="p-0 gap-0.5">
-                        <div className="flex items-start justify-between gap-2">
-                          <Card.Title className="text-sm">{selectedMod.name}</Card.Title>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onPress={() => setEditingMeta(true)}
-                            className="h-6 shrink-0 px-2 text-[11px] text-accent"
-                          >
-                            <Pencil className="size-3" />
-                            {t.editMetadata}
-                          </Button>
-                        </div>
-                        <Card.Description className="text-xs">
-                          {t.authorLabel}: {selectedMod.author || t.authorCommunity}
-                        </Card.Description>
-                      </Card.Header>
-
-                      <Card.Content className="p-0 space-y-2">
-                        {selectedMod.description && (
-                          <p className="text-xs leading-relaxed text-foreground/85">{selectedMod.description}</p>
+                <Modal.Body className="min-h-0 flex-1 overflow-y-auto py-3">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-[310px_1fr]">
+                    {/* LEFT COLUMN: Cover Banner + Stats + Always-Visible Actions */}
+                    <div className="space-y-3">
+                      <div
+                        onClick={() => handlePickCover(selectedMod)}
+                        onDragOver={(e) => {
+                          if (!e.dataTransfer.types.includes('Files')) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setCoverDropHover(true);
+                        }}
+                        onDragLeave={() => setCoverDropHover(false)}
+                        onDrop={(e) => handleCoverBannerDrop(e, selectedMod)}
+                        className={`group/cover relative h-48 w-full cursor-pointer overflow-hidden rounded-xl border border-border/80 bg-gradient-to-br from-surface-secondary via-background to-accent-soft/25 transition-all ${
+                          coverDropHover ? 'ring-2 ring-inset ring-accent' : ''
+                        }`}
+                      >
+                        {selectedMod.coverUrl ? (
+                          <img
+                            src={resolveApiUrl(selectedMod.coverUrl)}
+                            alt={selectedMod.name}
+                            className="h-full w-full object-cover transition-transform duration-300 group-hover/cover:scale-[1.03]"
+                          />
+                        ) : (
+                          <div className="flex h-full w-full flex-col items-center justify-center gap-1.5 text-muted/70">
+                            <ImagePlus className="size-8 text-accent/70" />
+                            <span className="text-xs">{t.dropCoverHint}</span>
+                          </div>
                         )}
-                        {selectedMod.tags.length > 0 && (
-                          <div className="flex flex-wrap gap-1">
-                            {selectedMod.tags.map((tag) => (
-                              <Chip key={tag} size="sm" variant="soft" className="h-4">
-                                <Chip.Label className="font-mono text-[10px]">#{tag}</Chip.Label>
-                              </Chip>
+                        <div
+                          className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-gradient-to-t from-black/80 via-black/45 to-transparent px-3 py-2"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <Chip size="sm" color={getCategoryAccent(selectedMod.effectiveCategory)} variant="primary" className="h-5">
+                            <Chip.Label className="text-[10px]">
+                              {getModCategoryLabel(selectedMod.effectiveCategory, t)}
+                            </Chip.Label>
+                          </Chip>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              isDisabled={busyAction}
+                              onPress={() => handlePickCover(selectedMod)}
+                              className="h-6 px-2 text-[11px]"
+                            >
+                              <ImagePlus className="size-3" />
+                              {t.changeCover}
+                            </Button>
+                            {selectedMod.cover && (
+                              <Button
+                                size="sm"
+                                variant="danger-soft"
+                                isDisabled={busyAction}
+                                onPress={() => handleClearCover(selectedMod)}
+                                className="h-6 px-1.5 text-[11px]"
+                              >
+                                <X className="size-3" />
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <Surface
+                        variant="secondary"
+                        className="rounded-lg border border-border/60 px-2.5 py-2 font-mono text-[11px] text-success-soft-foreground"
+                      >
+                        {summarizeModStats(selectedMod, t)}
+                      </Surface>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          onPress={() => {
+                            setDetailModalOpen(false);
+                            onOpenInStudio(selectedMod.id);
+                          }}
+                          className="h-8 text-xs"
+                        >
+                          <Palette className="size-3.5" />
+                          {t.editInStudio}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onPress={() => apiPost('/api/shell/open-folder', { path: selectedMod.directoryPath })}
+                          className="h-8 text-xs"
+                        >
+                          <FolderOpen className="size-3.5" />
+                          {t.openFolder}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          isDisabled={busyAction}
+                          onPress={() => handlePackSingle(selectedMod, 'yrdpk')}
+                          className="h-8 text-xs"
+                        >
+                          <Archive className="size-3.5 text-warning" />
+                          打包 .yrdpk
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          isDisabled={busyAction}
+                          onPress={() => handlePackSingle(selectedMod, 'zip')}
+                          className="h-8 text-xs"
+                        >
+                          <Archive className="size-3.5 text-accent" />
+                          打包 .zip
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* RIGHT COLUMN: Full Scrollable Description / Metadata Editor / Auto Entries / Hints */}
+                    <div className="min-w-0 space-y-3">
+                      <Card variant="default" className="p-3.5 space-y-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-semibold text-foreground">{t.modalDescription}</span>
+                          {!editingMeta && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onPress={() => setEditingMeta(true)}
+                              className="h-6 px-2 text-[11px] text-accent"
+                            >
+                              <Pencil className="size-3" />
+                              {t.editMetadata}
+                            </Button>
+                          )}
+                        </div>
+
+                        {!editingMeta ? (
+                          <>
+                            <p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-foreground/90">
+                              {selectedMod.description || '—'}
+                            </p>
+                            {selectedMod.tags.length > 0 && (
+                              <div className="flex flex-wrap gap-1 pt-1">
+                                {selectedMod.tags.map((tag) => (
+                                  <Chip key={tag} size="sm" variant="soft" className="h-4">
+                                    <Chip.Label className="font-mono text-[10px]">#{tag}</Chip.Label>
+                                  </Chip>
+                                ))}
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <div className="space-y-2.5">
+                            <TextField
+                              fullWidth
+                              variant="secondary"
+                              value={metaForm.name}
+                              onChange={(v) => setMetaForm((f) => ({ ...f, name: v }))}
+                            >
+                              <Label className="text-[11px]">{t.modalDisplayName}</Label>
+                              <Input className="h-8 text-xs" />
+                            </TextField>
+
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <div className="mb-1 text-[11px] font-medium text-foreground/85">{t.modCategoryLabel}</div>
+                                <Select
+                                  aria-label={t.modCategoryLabel}
+                                  fullWidth
+                                  variant="secondary"
+                                  value={metaForm.category}
+                                  onChange={(k) => k && setMetaForm((f) => ({ ...f, category: String(k) }))}
+                                >
+                                  <Select.Trigger className="h-8 text-xs">
+                                    <Select.Value />
+                                    <Select.Indicator />
+                                  </Select.Trigger>
+                                  <Select.Popover>
+                                    <ListBox>
+                                      <ListBox.Item id="auto" textValue={t.modCatAuto}>
+                                        {t.modCatAuto}
+                                        <ListBox.ItemIndicator />
+                                      </ListBox.Item>
+                                      {MOD_CATEGORY_LIST.filter((c) => c !== 'all').map((cat) => (
+                                        <ListBox.Item key={cat} id={cat} textValue={getModCategoryLabel(cat, t)}>
+                                          {getModCategoryLabel(cat, t)}
+                                          <ListBox.ItemIndicator />
+                                        </ListBox.Item>
+                                      ))}
+                                    </ListBox>
+                                  </Select.Popover>
+                                </Select>
+                              </div>
+                              <TextField
+                                fullWidth
+                                variant="secondary"
+                                value={metaForm.version}
+                                onChange={(v) => setMetaForm((f) => ({ ...f, version: v }))}
+                              >
+                                <Label className="text-[11px]">Version</Label>
+                                <Input className="h-8 font-mono text-xs" />
+                              </TextField>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2">
+                              <TextField
+                                fullWidth
+                                variant="secondary"
+                                value={metaForm.author}
+                                onChange={(v) => setMetaForm((f) => ({ ...f, author: v }))}
+                              >
+                                <Label className="text-[11px]">{t.modalAuthor}</Label>
+                                <Input className="h-8 text-xs" />
+                              </TextField>
+                              <TextField
+                                fullWidth
+                                variant="secondary"
+                                value={metaForm.minGameVersion}
+                                onChange={(v) => setMetaForm((f) => ({ ...f, minGameVersion: v }))}
+                              >
+                                <Label className="text-[11px]">{t.modalMinGameVer}</Label>
+                                <Input className="h-8 font-mono text-xs" placeholder="0.2.47" />
+                              </TextField>
+                            </div>
+
+                            <TextField
+                              fullWidth
+                              variant="secondary"
+                              value={metaForm.tagsCsv}
+                              onChange={(v) => setMetaForm((f) => ({ ...f, tagsCsv: v }))}
+                            >
+                              <Label className="text-[11px]">{t.modTagsLabel}</Label>
+                              <Input className="h-8 font-mono text-xs" placeholder="cards, lua, settings" />
+                            </TextField>
+
+                            <TextField
+                              fullWidth
+                              variant="secondary"
+                              value={metaForm.description}
+                              onChange={(v) => setMetaForm((f) => ({ ...f, description: v }))}
+                            >
+                              <Label className="text-[11px]">{t.modalDescription}</Label>
+                              <TextArea rows={4} className="text-xs" />
+                            </TextField>
+
+                            <Switch
+                              size="sm"
+                              isSelected={metaForm.autoDiscoverEntries}
+                              onChange={(checked) => setMetaForm((f) => ({ ...f, autoDiscoverEntries: checked }))}
+                            >
+                              <Switch.Content>
+                                <Switch.Control><Switch.Thumb /></Switch.Control>
+                                <div className="min-w-0">
+                                  <span className="block text-[11px] font-medium text-foreground">{t.autoEntriesLabel}</span>
+                                  <span className="block text-[10px] text-muted">{t.autoEntriesHint}</span>
+                                </div>
+                              </Switch.Content>
+                            </Switch>
+
+                            <div className="flex items-center justify-end gap-1.5 pt-1">
+                              <Button size="sm" variant="secondary" onPress={() => setEditingMeta(false)} className="h-7 text-xs">
+                                {t.cancel}
+                              </Button>
+                              <Button size="sm" variant="primary" isDisabled={busyAction} onPress={handleSaveMetadata} className="h-7 text-xs">
+                                <Save className="size-3.5" />
+                                {t.saveMetadata}
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                      </Card>
+
+                      {/* Auto-Imported Entries */}
+                      <Card variant="default" className="p-3 gap-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                            <Code2 className="size-3.5 text-accent" />
+                            {t.autoEntriesTitle}
+                          </span>
+                          <Chip
+                            size="sm"
+                            color={selectedMod.autoDiscoverEntries ? 'success' : 'default'}
+                            variant="soft"
+                            className="h-4"
+                          >
+                            <Chip.Label className="text-[10px]">
+                              {selectedMod.autoDiscoverEntries ? 'AUTO' : 'MANUAL'}
+                            </Chip.Label>
+                          </Chip>
+                        </div>
+
+                        {selectedMod.resolvedJsEntries.length === 0 &&
+                        selectedMod.resolvedCssEntries.length === 0 &&
+                        selectedMod.resolvedLuaLibs.length === 0 ? (
+                          <p className="text-[11px] text-muted">{t.autoEntriesEmpty}</p>
+                        ) : (
+                          <div className="space-y-1 text-[11px]">
+                            {selectedMod.resolvedJsEntries.map((entry) => (
+                              <div key={`js-${entry}`} className="flex items-center gap-1.5 rounded-md bg-surface-secondary/70 px-2 py-1 font-mono">
+                                <Chip size="sm" color="warning" variant="soft" className="h-4 shrink-0">JS</Chip>
+                                <span className="truncate text-foreground/90">{entry}</span>
+                              </div>
+                            ))}
+                            {selectedMod.resolvedCssEntries.map((entry) => (
+                              <div key={`css-${entry}`} className="flex items-center gap-1.5 rounded-md bg-surface-secondary/70 px-2 py-1 font-mono">
+                                <Chip size="sm" color="accent" variant="soft" className="h-4 shrink-0">CSS</Chip>
+                                <span className="truncate text-foreground/90">{entry}</span>
+                              </div>
+                            ))}
+                            {selectedMod.resolvedLuaLibs.map((entry) => (
+                              <div key={`lua-${entry}`} className="flex items-center gap-1.5 rounded-md bg-surface-secondary/70 px-2 py-1 font-mono">
+                                <Chip size="sm" color="success" variant="soft" className="h-4 shrink-0">Lua Lib</Chip>
+                                <span className="truncate text-foreground/90">{entry}</span>
+                              </div>
                             ))}
                           </div>
                         )}
-                        <Surface
-                          variant="secondary"
-                          className="rounded-lg border border-border/60 px-2.5 py-2 font-mono text-[11px] text-success-soft-foreground"
-                        >
-                          {summarizeModStats(selectedMod, t)}
-                        </Surface>
-                      </Card.Content>
-                    </>
-                  ) : (
-                    <div className="space-y-2.5 rounded-xl border border-accent/40 bg-surface-secondary/50 p-2.5">
-                      <TextField
-                        fullWidth
-                        variant="secondary"
-                        value={metaForm.name}
-                        onChange={(v) => setMetaForm((f) => ({ ...f, name: v }))}
-                      >
-                        <Label className="text-[11px]">{t.modalDisplayName}</Label>
-                        <Input className="h-7 text-xs" />
-                      </TextField>
+                      </Card>
 
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <div className="mb-1 text-[11px] font-medium text-foreground/85">{t.modCategoryLabel}</div>
-                          <Select
-                            aria-label={t.modCategoryLabel}
-                            fullWidth
-                            variant="secondary"
-                            value={metaForm.category}
-                            onChange={(k) => k && setMetaForm((f) => ({ ...f, category: String(k) }))}
-                          >
-                            <Select.Trigger className="h-7 text-xs">
-                              <Select.Value />
-                              <Select.Indicator />
-                            </Select.Trigger>
-                            <Select.Popover>
-                              <ListBox>
-                                <ListBox.Item id="auto" textValue={t.modCatAuto}>
-                                  {t.modCatAuto}
-                                  <ListBox.ItemIndicator />
-                                </ListBox.Item>
-                                {MOD_CATEGORY_LIST.filter((c) => c !== 'all').map((cat) => (
-                                  <ListBox.Item key={cat} id={cat} textValue={getModCategoryLabel(cat, t)}>
-                                    {getModCategoryLabel(cat, t)}
-                                    <ListBox.ItemIndicator />
-                                  </ListBox.Item>
-                                ))}
-                              </ListBox>
-                            </Select.Popover>
-                          </Select>
+                      {/* MOD Hints & Spec Checklist */}
+                      <Card variant="default" className="p-3 gap-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                            <Info className="size-3.5 text-accent" />
+                            {t.modHintsTitle}
+                          </span>
+                          <Button size="sm" variant="ghost" onPress={onOpenModGuide} className="h-6 px-2 text-[11px] text-accent">
+                            <BookOpen className="size-3" />
+                            {t.modGuideBtn}
+                          </Button>
                         </div>
-
-                        <TextField
-                          fullWidth
-                          variant="secondary"
-                          value={metaForm.version}
-                          onChange={(v) => setMetaForm((f) => ({ ...f, version: v }))}
-                        >
-                          <Label className="text-[11px]">Version</Label>
-                          <Input className="h-7 font-mono text-xs" />
-                        </TextField>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2">
-                        <TextField
-                          fullWidth
-                          variant="secondary"
-                          value={metaForm.author}
-                          onChange={(v) => setMetaForm((f) => ({ ...f, author: v }))}
-                        >
-                          <Label className="text-[11px]">{t.modalAuthor}</Label>
-                          <Input className="h-7 text-xs" />
-                        </TextField>
-                        <TextField
-                          fullWidth
-                          variant="secondary"
-                          value={metaForm.minGameVersion}
-                          onChange={(v) => setMetaForm((f) => ({ ...f, minGameVersion: v }))}
-                        >
-                          <Label className="text-[11px]">{t.modalMinGameVer}</Label>
-                          <Input className="h-7 font-mono text-xs" placeholder="0.2.46" />
-                        </TextField>
-                      </div>
-
-                      <TextField
-                        fullWidth
-                        variant="secondary"
-                        value={metaForm.tagsCsv}
-                        onChange={(v) => setMetaForm((f) => ({ ...f, tagsCsv: v }))}
-                      >
-                        <Label className="text-[11px]">{t.modTagsLabel}</Label>
-                        <Input className="h-7 font-mono text-xs" placeholder="cards, lua, settings" />
-                      </TextField>
-
-                      <TextField
-                        fullWidth
-                        variant="secondary"
-                        value={metaForm.description}
-                        onChange={(v) => setMetaForm((f) => ({ ...f, description: v }))}
-                      >
-                        <Label className="text-[11px]">{t.modalDescription}</Label>
-                        <Input className="h-7 text-xs" />
-                      </TextField>
-
-                      <Switch
-                        size="sm"
-                        isSelected={metaForm.autoDiscoverEntries}
-                        onChange={(checked) => setMetaForm((f) => ({ ...f, autoDiscoverEntries: checked }))}
-                      >
-                        <Switch.Content>
-                          <Switch.Control>
-                            <Switch.Thumb />
-                          </Switch.Control>
-                          <div className="min-w-0">
-                            <span className="block text-[11px] font-medium text-foreground">{t.autoEntriesLabel}</span>
-                            <span className="block text-[10px] text-muted">{t.autoEntriesHint}</span>
-                          </div>
-                        </Switch.Content>
-                      </Switch>
-
-                      <div className="flex items-center justify-end gap-1.5 pt-1">
-                        <Button size="sm" variant="secondary" onPress={() => setEditingMeta(false)} className="h-7 text-xs">
-                          {t.cancel}
-                        </Button>
-                        <Button size="sm" variant="primary" isDisabled={busyAction} onPress={handleSaveMetadata} className="h-7 text-xs">
-                          <Save className="size-3.5" />
-                          {t.saveMetadata}
-                        </Button>
-                      </div>
+                        <ul className="space-y-1.5 text-[11px] leading-relaxed">
+                          <li className="flex items-start gap-1.5 text-foreground/85">
+                            <CheckCircle2 className={`mt-0.5 size-3.5 shrink-0 ${selectedMod.coverUrl ? 'text-success' : 'text-muted/50'}`} />
+                            <span>{selectedMod.coverUrl ? t.hintHasCover : t.hintNoCover}</span>
+                          </li>
+                          <li className="flex items-start gap-1.5 text-foreground/85">
+                            <CheckCircle2 className={`mt-0.5 size-3.5 shrink-0 ${selectedMod.autoDiscoverEntries ? 'text-success' : 'text-warning'}`} />
+                            <span>
+                              {selectedMod.autoDiscoverEntries
+                                ? fmt(t.hintAutoEntriesOn, {
+                                    js: selectedMod.resolvedJsEntries.length,
+                                    css: selectedMod.resolvedCssEntries.length,
+                                    lua: selectedMod.resolvedLuaLibs.length,
+                                  })
+                                : t.hintAutoEntriesOff}
+                            </span>
+                          </li>
+                          <li className="flex items-start gap-1.5 text-foreground/85">
+                            <CheckCircle2 className={`mt-0.5 size-3.5 shrink-0 ${selectedMod.settingsCount > 0 ? 'text-success' : 'text-muted/50'}`} />
+                            <span>
+                              {selectedMod.settingsCount > 0
+                                ? fmt(t.hintHasSettings, { n: selectedMod.settingsCount })
+                                : t.hintNoSettings}
+                            </span>
+                          </li>
+                          {selectedMod.stats.cardCount > 0 && selectedMod.stats.scriptCount < selectedMod.stats.cardCount && (
+                            <li className="flex items-start gap-1.5 text-warning">
+                              <Info className="mt-0.5 size-3.5 shrink-0" />
+                              <span>
+                                {fmt(t.hintMissingLua, {
+                                  cards: selectedMod.stats.cardCount,
+                                  scripts: selectedMod.stats.scriptCount,
+                                })}
+                              </span>
+                            </li>
+                          )}
+                        </ul>
+                      </Card>
                     </div>
-                  )}
-
-                  <Card.Footer className="p-0 pt-1 flex flex-wrap gap-1.5">
-                    <Button size="sm" variant="primary" onPress={() => onOpenInStudio(selectedMod.id)} className="h-7 text-xs">
-                      <Palette className="size-3.5" />
-                      {t.editInStudio}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onPress={() => apiPost('/api/shell/open-folder', { path: selectedMod.directoryPath })}
-                      className="h-7 text-xs"
-                    >
-                      <FolderOpen className="size-3.5" />
-                      {t.openFolder}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      isDisabled={busyAction}
-                      onPress={() => handlePackSingle(selectedMod)}
-                      className="h-7 text-xs"
-                    >
-                      <Archive className="size-3.5 text-warning" />
-                      {t.packZip}
-                    </Button>
-                  </Card.Footer>
-                </div>
-              </Card>
-
-              {/* Auto-Imported Entries Inspector Card */}
-              <Card variant="default" className="p-3 gap-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-                    <Code2 className="size-3.5 text-accent" />
-                    {t.autoEntriesTitle}
-                  </span>
-                  <Chip
-                    size="sm"
-                    color={selectedMod.autoDiscoverEntries ? 'success' : 'default'}
-                    variant="soft"
-                    className="h-4"
-                  >
-                    <Chip.Label className="text-[10px]">
-                      {selectedMod.autoDiscoverEntries ? 'AUTO' : 'MANUAL'}
-                    </Chip.Label>
-                  </Chip>
-                </div>
-
-                {selectedMod.resolvedJsEntries.length === 0 &&
-                selectedMod.resolvedCssEntries.length === 0 &&
-                selectedMod.resolvedLuaLibs.length === 0 ? (
-                  <p className="text-[11px] text-muted">{t.autoEntriesEmpty}</p>
-                ) : (
-                  <div className="space-y-1.5 text-[11px]">
-                    {selectedMod.resolvedJsEntries.map((entry) => (
-                      <div
-                        key={`js-${entry}`}
-                        className="flex items-center gap-1.5 rounded-md bg-surface-secondary/70 px-2 py-1 font-mono"
-                      >
-                        <Chip size="sm" color="warning" variant="soft" className="h-4 shrink-0">
-                          JS
-                        </Chip>
-                        <span className="truncate text-foreground/90">{entry}</span>
-                      </div>
-                    ))}
-                    {selectedMod.resolvedCssEntries.map((entry) => (
-                      <div
-                        key={`css-${entry}`}
-                        className="flex items-center gap-1.5 rounded-md bg-surface-secondary/70 px-2 py-1 font-mono"
-                      >
-                        <Chip size="sm" color="accent" variant="soft" className="h-4 shrink-0">
-                          CSS
-                        </Chip>
-                        <span className="truncate text-foreground/90">{entry}</span>
-                      </div>
-                    ))}
-                    {selectedMod.resolvedLuaLibs.map((entry) => (
-                      <div
-                        key={`lua-${entry}`}
-                        className="flex items-center gap-1.5 rounded-md bg-surface-secondary/70 px-2 py-1 font-mono"
-                      >
-                        <Chip size="sm" color="success" variant="soft" className="h-4 shrink-0">
-                          Lua Lib
-                        </Chip>
-                        <span className="truncate text-foreground/90">{entry}</span>
-                      </div>
-                    ))}
                   </div>
-                )}
-              </Card>
+                </Modal.Body>
 
-              {/* Complete MOD Hints & Spec Checklist */}
-              <Card variant="default" className="p-3 gap-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-                    <Info className="size-3.5 text-accent" />
-                    {t.modHintsTitle}
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onPress={onOpenModGuide}
-                    className="h-6 px-2 text-[11px] text-accent"
-                  >
-                    <BookOpen className="size-3" />
-                    {t.modGuideBtn}
+                <Modal.Footer className="flex items-center justify-end gap-2 pt-2">
+                  <Button size="sm" variant="secondary" onPress={() => setDetailModalOpen(false)}>
+                    {t.closeBtn}
                   </Button>
-                </div>
-
-                <ul className="space-y-1.5 text-[11px] leading-relaxed">
-                  <li className="flex items-start gap-1.5 text-foreground/85">
-                    <CheckCircle2
-                      className={`mt-0.5 size-3.5 shrink-0 ${
-                        selectedMod.coverUrl ? 'text-success' : 'text-muted/50'
-                      }`}
-                    />
-                    <span>{selectedMod.coverUrl ? t.hintHasCover : t.hintNoCover}</span>
-                  </li>
-                  <li className="flex items-start gap-1.5 text-foreground/85">
-                    <CheckCircle2
-                      className={`mt-0.5 size-3.5 shrink-0 ${
-                        selectedMod.autoDiscoverEntries ? 'text-success' : 'text-warning'
-                      }`}
-                    />
-                    <span>
-                      {selectedMod.autoDiscoverEntries
-                        ? fmt(t.hintAutoEntriesOn, {
-                            js: selectedMod.resolvedJsEntries.length,
-                            css: selectedMod.resolvedCssEntries.length,
-                            lua: selectedMod.resolvedLuaLibs.length,
-                          })
-                        : t.hintAutoEntriesOff}
-                    </span>
-                  </li>
-                  <li className="flex items-start gap-1.5 text-foreground/85">
-                    <CheckCircle2
-                      className={`mt-0.5 size-3.5 shrink-0 ${
-                        selectedMod.settingsCount > 0 ? 'text-success' : 'text-muted/50'
-                      }`}
-                    />
-                    <span>
-                      {selectedMod.settingsCount > 0
-                        ? fmt(t.hintHasSettings, { n: selectedMod.settingsCount })
-                        : t.hintNoSettings}
-                    </span>
-                  </li>
-                  {selectedMod.stats.cardCount > 0 && selectedMod.stats.scriptCount < selectedMod.stats.cardCount && (
-                    <li className="flex items-start gap-1.5 text-warning">
-                      <Info className="mt-0.5 size-3.5 shrink-0" />
-                      <span>
-                        {fmt(t.hintMissingLua, {
-                          cards: selectedMod.stats.cardCount,
-                          scripts: selectedMod.stats.scriptCount,
-                        })}
-                      </span>
-                    </li>
-                  )}
-                </ul>
-              </Card>
-            </>
-          )}
-
-          {status.versionIssues.length > 0 && (
-            <Alert status="danger">
-              <Alert.Indicator />
-              <Alert.Content>
-                <Alert.Title className="text-xs">
-                  {t.versionIssuesTitle} ({status.versionIssues.length})
-                </Alert.Title>
-                <Alert.Description>
-                  <ul className="mt-1 space-y-1 text-[11px]">
-                    {status.versionIssues.map((v, i) => (
-                      <li key={`${v.modId}-${i}`}>
-                        <span className="font-semibold">{v.modName}:</span> {v.message}
-                      </li>
-                    ))}
-                  </ul>
-                </Alert.Description>
-              </Alert.Content>
-            </Alert>
-          )}
-
-          {status.conflicts.length === 0 ? (
-            <Alert status="success">
-              <Alert.Indicator />
-              <Alert.Content>
-                <Alert.Title className="text-xs">{t.conflictsTitle}</Alert.Title>
-                <Alert.Description className="text-[11px]">{t.noConflicts}</Alert.Description>
-              </Alert.Content>
-            </Alert>
-          ) : (
-            <Alert status="warning">
-              <Alert.Indicator />
-              <Alert.Content>
-                <Alert.Title className="text-xs">
-                  {t.conflictsTitle} ({status.conflicts.length})
-                </Alert.Title>
-                <Alert.Description>
-                  <div className="mt-1.5 max-h-48 overflow-y-auto space-y-1.5 pr-1">
-                    {status.conflicts.map((c, i) => (
-                      <div
-                        key={`${c.category}-${c.resourceKey}-${i}`}
-                        className="rounded-lg border border-warning/25 bg-surface/60 px-2 py-1.5 text-[11px]"
-                      >
-                        <div className="font-mono font-semibold text-foreground">
-                          [{c.category}] {c.resourceKey}
-                        </div>
-                        <div className="mt-0.5 text-muted">
-                          {c.modIds.join(' → ')} · {t.conflictWinner}:{' '}
-                          <span className="font-semibold text-success">{c.winnerModId}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </Alert.Description>
-              </Alert.Content>
-            </Alert>
-          )}
-        </aside>
-      )}
+                </Modal.Footer>
+              </>
+            )}
+          </Modal.Dialog>
+        </Modal.Container>
+      </Modal.Backdrop>
     </div>
   );
 }

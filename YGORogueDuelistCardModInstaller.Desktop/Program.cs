@@ -48,6 +48,105 @@ internal static class Program
     [DllImport("dwmapi.dll")]
     private static extern int DwmExtendFrameIntoClientArea(IntPtr hWnd, ref MARGINS pMarInset);
 
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct OPENFILENAME
+    {
+        public int lStructSize;
+        public IntPtr hwndOwner;
+        public IntPtr hInstance;
+        public string lpstrFilter;
+        public IntPtr lpstrCustomFilter;
+        public int nMaxCustFilter;
+        public int nFilterIndex;
+        public IntPtr lpstrFile;
+        public int nMaxFile;
+        public IntPtr lpstrFileTitle;
+        public int nMaxFileTitle;
+        public string? lpstrInitialDir;
+        public string? lpstrTitle;
+        public int Flags;
+        public short nFileOffset;
+        public short nFileExtension;
+        public string? lpstrDefExt;
+        public IntPtr lCustData;
+        public IntPtr lpfnHook;
+        public string? lpTemplateName;
+        public IntPtr pvReserved;
+        public int dwReserved;
+        public int FlagsEx;
+    }
+
+    [DllImport("comdlg32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool GetSaveFileNameW(ref OPENFILENAME ofn);
+
+    private static string? ShowWindowsSaveArchiveDialog(IntPtr ownerHwnd, string title, string suggestedName, string? initialDir)
+    {
+        string? picked = null;
+        var thread = new Thread(() =>
+        {
+            picked = ShowWindowsSaveArchiveDialogCore(ownerHwnd, title, suggestedName, initialDir);
+        });
+        if (OperatingSystem.IsWindows())
+        {
+            thread.SetApartmentState(ApartmentState.STA);
+        }
+        thread.Start();
+        thread.Join();
+        return picked;
+    }
+
+    private static string? ShowWindowsSaveArchiveDialogCore(IntPtr ownerHwnd, string title, string suggestedName, string? initialDir)
+    {
+        const int OFN_OVERWRITEPROMPT = 0x00000002;
+        const int OFN_NOCHANGEDIR = 0x00000008;
+        const int OFN_PATHMUSTEXIST = 0x00000800;
+        const int OFN_EXPLORER = 0x00080000;
+        const int maxChars = 4096;
+
+        var preferZip = suggestedName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
+        var cleanTitle = title.Replace("/", " ").Replace("\\", " ");
+        var buf = Marshal.AllocHGlobal(maxChars * 2);
+        try
+        {
+            // Zero-fill and copy suggested filename into Unicode buffer
+            for (var i = 0; i < maxChars * 2; i++) Marshal.WriteByte(buf, i, 0);
+            var safeName = Path.GetFileName(suggestedName);
+            if (!string.IsNullOrWhiteSpace(safeName))
+            {
+                var chars = safeName.ToCharArray();
+                Marshal.Copy(chars, 0, buf, Math.Min(chars.Length, maxChars - 1));
+            }
+
+            var ofn = new OPENFILENAME
+            {
+                lStructSize = Marshal.SizeOf<OPENFILENAME>(),
+                hwndOwner = ownerHwnd,
+                lpstrFilter = "YGO Rogue MOD Package (*.yrdpk)\0*.yrdpk\0ZIP Archive (*.zip)\0*.zip\0All Files (*.*)\0*.*\0\0",
+                nFilterIndex = preferZip ? 2 : 1,
+                lpstrFile = buf,
+                nMaxFile = maxChars,
+                lpstrInitialDir = !string.IsNullOrWhiteSpace(initialDir) && Directory.Exists(initialDir) ? initialDir : null,
+                lpstrTitle = cleanTitle,
+                Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR,
+                lpstrDefExt = preferZip ? "zip" : "yrdpk"
+            };
+
+            if (!GetSaveFileNameW(ref ofn)) return null;
+            var result = Marshal.PtrToStringUni(buf)?.Trim();
+            if (string.IsNullOrWhiteSpace(result)) return null;
+            if (!result.EndsWith(".yrdpk", StringComparison.OrdinalIgnoreCase) &&
+                !result.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+            {
+                result += ofn.nFilterIndex == 2 ? ".zip" : ".yrdpk";
+            }
+            return result;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buf);
+        }
+    }
+
     private static void ApplyWindows11Chrome(IntPtr hwnd)
     {
         if (!OperatingSystem.IsWindows() || hwnd == IntPtr.Zero) return;
@@ -126,7 +225,18 @@ internal static class Program
             },
             pickSaveZipOnUi: (title, suggestedName, initialPath) =>
             {
-                if (window is null) return null;
+                if (window is null)
+                {
+                    // Headless / browser --serve mode: pack straight into dist/<suggestedName>
+                    return string.IsNullOrWhiteSpace(initialPath)
+                        ? suggestedName
+                        : Path.Combine(initialPath, suggestedName);
+                }
+                if (OperatingSystem.IsWindows())
+                {
+                    // Use native Win32 GetSaveFileNameW on a dedicated STA thread (100% Native AOT-safe, full Unicode/Chinese filename + .yrdpk/.zip support!)
+                    return ShowWindowsSaveArchiveDialog(window.WindowHandle, title, suggestedName, initialPath);
+                }
                 var defaultPath = string.IsNullOrWhiteSpace(initialPath)
                     ? suggestedName
                     : Path.Combine(initialPath, suggestedName);

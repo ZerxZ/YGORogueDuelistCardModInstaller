@@ -858,23 +858,41 @@ public sealed partial class DesktopApiServer : IDisposable
     {
         var modId = Str(body, "modId");
         var outputPath = NullIfBlank(Str(body, "outputPath"));
+        var format = Str(body, "format").Trim().ToLowerInvariant();
+        if (outputPath is null && format is "zip" or "yrdpk")
+        {
+            var repo = GetEngine().Repository;
+            var mod = repo.LoadMods().FirstOrDefault(m => string.Equals(m.Id, modId, StringComparison.OrdinalIgnoreCase))
+                ?? throw new ModOperationException($"找不到 MOD：{modId}");
+            outputPath = Path.Combine(repo.WorkspaceRoot, "dist", $"{mod.Id}-v{mod.Manifest.Version}.{format}");
+        }
         var zipPath = ModPackager.PackSingleMod(GetEngine().Repository, modId, outputPath);
         EmitLog(LogLevel.Ok, $"Packed MOD '{modId}' -> {zipPath}");
-        return new JsonObject { ["ok"] = true, ["zipPath"] = zipPath };
+        return new JsonObject { ["ok"] = true, ["zipPath"] = zipPath, ["outputDir"] = Path.GetDirectoryName(zipPath) };
     }
 
     private JsonObject HandlePackWorkspace(JsonObject body)
     {
+        var outputPath = NullIfBlank(Str(body, "outputPath"));
+        var format = Str(body, "format").Trim().ToLowerInvariant();
+        var name = NullIfBlank(Str(body, "name"));
+        var version = NullIfBlank(Str(body, "version"));
+        if (outputPath is null && format is "zip" or "yrdpk")
+        {
+            var repo = GetEngine().Repository;
+            var safeSlug = ModRepository.SanitizeId(name ?? "YGO-Rogue-Modpack");
+            outputPath = Path.Combine(repo.WorkspaceRoot, "dist", $"{safeSlug}-v{version ?? "1.0.0"}.{format}");
+        }
         var (zipPath, count, minVer) = ModPackager.PackWorkspace(
             GetEngine().Repository,
-            NullIfBlank(Str(body, "outputPath")),
-            NullIfBlank(Str(body, "name")),
-            NullIfBlank(Str(body, "version")),
+            outputPath,
+            name,
+            version,
             NullIfBlank(Str(body, "description")),
             NullIfBlank(Str(body, "minGameVersion")),
             Bool(body, "enabledOnly", false));
         EmitLog(LogLevel.Ok, $"Packed workspace ({count} MODs) -> {zipPath}");
-        return new JsonObject { ["ok"] = true, ["zipPath"] = zipPath, ["modCount"] = count, ["minGameVersion"] = minVer };
+        return new JsonObject { ["ok"] = true, ["zipPath"] = zipPath, ["outputDir"] = Path.GetDirectoryName(zipPath), ["modCount"] = count, ["minGameVersion"] = minVer };
     }
 
     // ==================== APPLY / RESTORE / UPDATE / LAUNCH ====================
