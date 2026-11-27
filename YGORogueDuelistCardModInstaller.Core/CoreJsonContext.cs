@@ -14,6 +14,15 @@ internal sealed class GitHubReleaseDto
     [JsonPropertyName("name")]
     public string? Name { get; set; }
 
+    [JsonPropertyName("body")]
+    public string? Body { get; set; }
+
+    [JsonPropertyName("published_at")]
+    public string? PublishedAt { get; set; }
+
+    [JsonPropertyName("html_url")]
+    public string? HtmlUrl { get; set; }
+
     [JsonPropertyName("draft")]
     public bool Draft { get; set; }
 
@@ -24,12 +33,16 @@ internal sealed class GitHubReleaseDto
     {
         TagName = TagName,
         Name = Name,
+        Body = Body,
+        PublishedAt = PublishedAt,
+        HtmlUrl = HtmlUrl,
         Draft = Draft,
         Assets = Assets?.Select(a => new GitHubAsset
         {
             Name = a.Name,
             BrowserDownloadUrl = a.BrowserDownloadUrl,
-            Size = a.Size
+            Size = a.Size,
+            Digest = a.Digest
         }).ToList() ?? []
     };
 }
@@ -44,6 +57,9 @@ internal sealed class GitHubAssetDto
 
     [JsonPropertyName("size")]
     public long Size { get; set; }
+
+    [JsonPropertyName("digest")]
+    public string? Digest { get; set; }
 }
 
 public sealed class ModRuntimeRegistryPayload

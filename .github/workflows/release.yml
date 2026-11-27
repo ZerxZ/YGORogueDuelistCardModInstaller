@@ -9,8 +9,9 @@ on:
     paths:
       - "YGORogueDuelistCardModInstaller/**"
       - "YGORogueDuelistCardModInstaller.Core/**"
-      - "YGORogueDuelistCardModInstaller.Avalonia/**"
+      - "YGORogueDuelistCardModInstaller.Desktop/**"
       - "YGORogueDuelistCardModInstaller.Mcp/**"
+      - "frontend/**"
       - "YGORogueDuelistCardModInstaller.slnx"
       - "Directory.Build.props"
       - "examples/**"
@@ -21,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Optional release tag (e.g. v1.0.0). Leave empty to auto-generate."
+        description: "Optional release tag (e.g. v1.2.0). Leave empty to auto-generate."
         required: false
         default: ""
 
@@ -68,7 +69,7 @@ jobs:
             if [[ -n "${INPUT_TAG}" ]]; then
               TAG="${INPUT_TAG}"
             else
-              TAG="v1.0.${GITHUB_RUN_NUMBER}"
+              TAG="v1.2.${GITHUB_RUN_NUMBER}"
             fi
             echo "should_release=true" >> "$GITHUB_OUTPUT"
             echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
@@ -85,8 +86,9 @@ jobs:
             DIFF_FILES=$(git diff --name-only "${LAST_TAG}" HEAD -- \
               YGORogueDuelistCardModInstaller \
               YGORogueDuelistCardModInstaller.Core \
-              YGORogueDuelistCardModInstaller.Avalonia \
+              YGORogueDuelistCardModInstaller.Desktop \
               YGORogueDuelistCardModInstaller.Mcp \
+              frontend \
               YGORogueDuelistCardModInstaller.slnx \
               Directory.Build.props \
               examples \
@@ -104,7 +106,7 @@ jobs:
           fi
 
           if [[ "${CHANGED}" == "yes" ]]; then
-            TAG="v1.0.${GITHUB_RUN_NUMBER}"
+            TAG="v1.2.${GITHUB_RUN_NUMBER}"
             echo "should_release=true" >> "$GITHUB_OUTPUT"
             echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
             echo "release_version=${TAG#v}" >> "$GITHUB_OUTPUT"
@@ -124,6 +126,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          cache-dependency-path: "frontend/pnpm-lock.yaml"
+
+      - name: Build React + CodeMirror 6 Frontend
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Push-Location frontend
+          pnpm install --frozen-lockfile
+          pnpm build
+          Pop-Location
+
       - name: Setup .NET 10 SDK
         uses: actions/setup-dotnet@v4
         with:
@@ -137,7 +160,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           dotnet publish YGORogueDuelistCardModInstaller/YGORogueDuelistCardModInstaller.csproj `
             -c Release -r win-x64 -p:Version=$env:RELEASE_VER -o out/cli --nologo
-          dotnet publish YGORogueDuelistCardModInstaller.Avalonia/YGORogueDuelistCardModInstaller.Avalonia.csproj `
+          dotnet publish YGORogueDuelistCardModInstaller.Desktop/YGORogueDuelistCardModInstaller.Desktop.csproj `
             -c Release -r win-x64 -p:Version=$env:RELEASE_VER -o out/gui --nologo
           dotnet publish YGORogueDuelistCardModInstaller.Mcp/YGORogueDuelistCardModInstaller.Mcp.csproj `
             -c Release -r win-x64 -p:Version=$env:RELEASE_VER -o out/mcp --nologo
@@ -150,6 +173,17 @@ jobs:
           $mcpResp = '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | ./out/mcp/YGORogueDuelistCardModInstaller.Mcp.exe
           if (-not ($mcpResp -match '"tools"')) { throw "MCP smoke test failed" }
 
+          $proc = Start-Process -FilePath "./out/gui/YGORogueDuelistCardModInstaller.Desktop.exe" -ArgumentList "--api-only" -PassThru
+          try {
+            Start-Sleep -Seconds 2
+            $health = Invoke-RestMethod -Uri "http://127.0.0.1:17850/api/health"
+            if (-not $health.ok) { throw "Desktop API health check failed" }
+            $html = (Invoke-WebRequest -Uri "http://127.0.0.1:17850/").Content
+            if (-not ($html -match '<div id="root">')) { throw "Embedded React index.html not served" }
+          } finally {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+          }
+
       - name: Package Release Archives & SHA-256 Checksums
         shell: pwsh
         env:
@@ -161,7 +195,7 @@ jobs:
           # Clean PDB debug symbols from distribution archives
           Get-ChildItem out -Recurse -Filter "*.pdb" | Remove-Item -Force
 
-          # 1. GUI package
+          # 1. GUI package (Native AOT WebView2 Studio)
           Copy-Item out/gui/* stage-gui/ -Recurse
           Copy-Item README.md, README.zh-CN.md, LICENSE stage-gui/
           Compress-Archive -Path stage-gui/* -DestinationPath "release-assets/YGO-Rogue-ModManager-GUI-win-x64-$env:RELEASE_TAG.zip"
@@ -198,7 +232,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.detect-changes.outputs.release_tag }}
-          name: "Yu-Gi-Oh! Rogue Duelist MOD Manager ${{ needs.detect-changes.outputs.release_tag }}"
+          name: "Yu-Gi-Oh! Rogue Duelist MOD Studio ${{ needs.detect-changes.outputs.release_tag }}"
           generate_release_notes: true
           make_latest: true
           files: |

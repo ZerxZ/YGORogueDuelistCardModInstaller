@@ -1,0 +1,1446 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Alert,
+  Button,
+  Card,
+  Checkbox,
+  Chip,
+  Input,
+  Label,
+  ListBox,
+  Select,
+  Separator,
+  Surface,
+  Switch,
+  TextField,
+} from '@heroui/react';
+import {
+  Archive,
+  ArrowDown,
+  ArrowUp,
+  BookOpen,
+  Bot,
+  CheckCircle2,
+  CheckSquare,
+  Code2,
+  FolderInput,
+  FolderOpen,
+  GripVertical,
+  ImagePlus,
+  Info,
+  Layers,
+  Package,
+  Palette,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Save,
+  Search,
+  Sliders,
+  Sparkles,
+  Square,
+  Trash2,
+  Upload,
+  User,
+  Wand2,
+  X,
+} from 'lucide-react';
+import { apiPost, apiUploadBinary, resolveApiUrl } from '../api';
+import { fmt, type I18nDict } from '../i18n';
+import type { ManagerStatus, ModCategoryKey, ModEntry } from '../types';
+
+interface ModLibraryTabProps {
+  status: ManagerStatus;
+  t: I18nDict;
+  selectedModId: string;
+  inspectorOpen: boolean;
+  onSelectMod: (id: string) => void;
+  onRefresh: () => Promise<void>;
+  onOpenInStudio: (modId: string) => void;
+  onOpenNewModModal: () => void;
+  onOpenModGuide: () => void;
+  onCopyAiPrompt: () => void;
+  onCreateExampleMod: () => Promise<void>;
+  onNotify: (msg: string, kind?: 'ok' | 'err' | 'info') => void;
+}
+
+export const MOD_CATEGORY_LIST: ModCategoryKey[] = [
+  'all',
+  'cards',
+  'characters',
+  'relics',
+  'packs_decks',
+  'ui_theme',
+  'script_plugin',
+  'trainer',
+  'overhaul',
+  'other',
+];
+
+export function getModCategoryLabel(cat: string | null | undefined, t: I18nDict): string {
+  switch ((cat ?? '').toLowerCase()) {
+    case 'all':
+      return t.modCatAll;
+    case 'cards':
+      return t.modCatCards;
+    case 'characters':
+      return t.modCatCharacters;
+    case 'relics':
+      return t.modCatRelics;
+    case 'packs_decks':
+      return t.modCatPacksDecks;
+    case 'ui_theme':
+      return t.modCatUiTheme;
+    case 'script_plugin':
+      return t.modCatScriptPlugin;
+    case 'trainer':
+      return t.modCatTrainer;
+    case 'overhaul':
+      return t.modCatOverhaul;
+    case 'other':
+      return t.modCatOther;
+    default:
+      return cat ? cat : t.modCatAuto;
+  }
+}
+
+function getCategoryIcon(cat: string): React.ReactNode {
+  switch (cat) {
+    case 'cards':
+      return <Sparkles className="size-3.5" />;
+    case 'characters':
+      return <User className="size-3.5" />;
+    case 'relics':
+      return <Wand2 className="size-3.5" />;
+    case 'packs_decks':
+      return <Package className="size-3.5" />;
+    case 'ui_theme':
+      return <Palette className="size-3.5" />;
+    case 'script_plugin':
+      return <Code2 className="size-3.5" />;
+    case 'trainer':
+      return <Sliders className="size-3.5" />;
+    case 'overhaul':
+      return <Layers className="size-3.5" />;
+    default:
+      return <Package className="size-3.5" />;
+  }
+}
+
+function getCategoryAccent(cat: string): 'accent' | 'warning' | 'success' | 'danger' | 'default' {
+  switch (cat) {
+    case 'overhaul':
+    case 'cards':
+      return 'accent';
+    case 'relics':
+    case 'trainer':
+      return 'warning';
+    case 'characters':
+    case 'packs_decks':
+      return 'success';
+    case 'ui_theme':
+    case 'script_plugin':
+      return 'default';
+    default:
+      return 'default';
+  }
+}
+
+function isImageFileName(name: string): boolean {
+  return /\.(png|webp|jpg|jpeg|svg|gif)$/i.test(name);
+}
+
+function isArchiveFileName(name: string): boolean {
+  return /\.(zip|ypk)$/i.test(name);
+}
+
+function summarizeModStats(m: ModEntry, t: I18nDict): string {
+  const s = m.stats;
+  const parts: string[] = [];
+  if (s.cardCount > 0) parts.push(fmt(t.statCards, { n: s.cardCount }));
+  if (s.characterCount > 0) parts.push(fmt(t.statChars, { n: s.characterCount }));
+  if (s.relicCount > 0) parts.push(fmt(t.statRelics, { n: s.relicCount }));
+  if (s.packCount > 0) parts.push(fmt(t.statPacks, { n: s.packCount }));
+  if (s.preconstructedDeckCount + s.deckCount > 0)
+    parts.push(fmt(t.statDecks, { n: s.preconstructedDeckCount + s.deckCount }));
+  if (s.scriptCount > 0) parts.push(`${s.scriptCount} Lua`);
+  if (s.luaLibCount > 0) parts.push(`${s.luaLibCount} Lib`);
+  if (s.artCount > 0) parts.push(fmt(t.statArt, { n: s.artCount }));
+  if (s.hasTrainer) parts.push(t.statTrainer);
+  if (s.hasLuaDsl) parts.push('mod.lua');
+  if (s.hasJsDsl) parts.push('mod.js');
+  if (s.jsPluginCount > 0) parts.push(`${s.jsPluginCount} JS`);
+  if (s.cssStyleCount > 0) parts.push(`${s.cssStyleCount} CSS`);
+  return parts.length > 0 ? parts.join(' · ') : t.statEmpty;
+}
+
+export function ModLibraryTab({
+  status,
+  t,
+  selectedModId,
+  inspectorOpen,
+  onSelectMod,
+  onRefresh,
+  onOpenInStudio,
+  onOpenNewModModal,
+  onOpenModGuide,
+  onCopyAiPrompt,
+  onCreateExampleMod,
+  onNotify,
+}: ModLibraryTabProps) {
+  const [busyAction, setBusyAction] = useState(false);
+  const [activeCategory, setActiveCategory] = useState<ModCategoryKey>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Drag & Drop state (Reorder MODs, Categorize MODs, Drop external .zip / cover image)
+  const [draggingModId, setDraggingModId] = useState<string | null>(null);
+  const [dropTargetModId, setDropTargetModId] = useState<string | null>(null);
+  const [dropPosition, setDropPosition] = useState<'before' | 'after'>('before');
+  const [dropTargetCategory, setDropTargetCategory] = useState<ModCategoryKey | null>(null);
+  const [isDraggingExternalFile, setIsDraggingExternalFile] = useState(false);
+  const [coverDropHover, setCoverDropHover] = useState(false);
+  const externalDragDepthRef = useRef(0);
+
+  // Inline Inspector Metadata Editor
+  const [editingMeta, setEditingMeta] = useState(false);
+  const [metaForm, setMetaForm] = useState({
+    name: '',
+    version: '',
+    author: '',
+    category: 'auto',
+    minGameVersion: '',
+    tagsCsv: '',
+    description: '',
+    autoDiscoverEntries: true,
+  });
+
+  const selectedMod = useMemo(
+    () => status.mods.find((m) => m.id === selectedModId) ?? status.mods[0] ?? null,
+    [status.mods, selectedModId],
+  );
+
+  useEffect(() => {
+    if (!selectedMod) return;
+    setMetaForm({
+      name: selectedMod.name || '',
+      version: selectedMod.version || '1.0.0',
+      author: selectedMod.author || '',
+      category: selectedMod.category || 'auto',
+      minGameVersion: selectedMod.minGameVersion || '',
+      tagsCsv: (selectedMod.tags ?? []).join(', '),
+      description: selectedMod.description || '',
+      autoDiscoverEntries: selectedMod.autoDiscoverEntries !== false,
+    });
+    setEditingMeta(false);
+  }, [selectedMod?.id, selectedMod?.name, selectedMod?.category, selectedMod?.coverUrl, selectedMod?.autoDiscoverEntries]);
+
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: status.mods.length };
+    for (const m of status.mods) {
+      const cat = (m.effectiveCategory || 'other').toLowerCase();
+      counts[cat] = (counts[cat] ?? 0) + 1;
+    }
+    return counts;
+  }, [status.mods]);
+
+  const filteredMods = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return status.mods.filter((m) => {
+      const eff = (m.effectiveCategory || 'other').toLowerCase();
+      if (activeCategory !== 'all' && eff !== activeCategory) return false;
+      if (!q) return true;
+      return (
+        m.name.toLowerCase().includes(q) ||
+        m.id.toLowerCase().includes(q) ||
+        (m.author || '').toLowerCase().includes(q) ||
+        (m.description || '').toLowerCase().includes(q) ||
+        eff.includes(q) ||
+        (m.tags ?? []).some((tag) => tag.toLowerCase().includes(q))
+      );
+    });
+  }, [status.mods, activeCategory, searchQuery]);
+
+  const conflictModIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of status.conflicts) {
+      for (const id of c.modIds) set.add(id.toLowerCase());
+    }
+    return set;
+  }, [status.conflicts]);
+
+  const versionIssueMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const v of status.versionIssues) {
+      map.set(v.modId.toLowerCase(), v.message);
+    }
+    return map;
+  }, [status.versionIssues]);
+
+  const runAction = async (fn: () => Promise<void>) => {
+    setBusyAction(true);
+    try {
+      await fn();
+      await onRefresh();
+    } catch (e) {
+      onNotify((e as Error).message, 'err');
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const handleImportZip = () =>
+    runAction(async () => {
+      const pick = await apiPost<{ path: string | null }>('/api/dialog/pick-file', {
+        title: t.importZip,
+        kind: 'zip',
+      });
+      if (!pick.path) return;
+      const res = await apiPost<{
+        isWorkspacePack: boolean;
+        isYpk?: boolean;
+        name: string;
+        count?: number;
+        cardCount?: number;
+        scriptCount?: number;
+        artCount?: number;
+      }>('/api/mods/import', {
+        sourcePath: pick.path,
+        force: true,
+      });
+      onNotify(
+        res.isYpk
+          ? fmt(t.toastImportedYpk, {
+              name: res.name,
+              cards: res.cardCount ?? 0,
+              scripts: res.scriptCount ?? 0,
+              art: res.artCount ?? 0,
+            })
+          : res.isWorkspacePack
+            ? fmt(t.toastImportedPack, { name: res.name, count: res.count ?? 0 })
+            : fmt(t.toastImportedMod, { name: res.name }),
+        'ok',
+      );
+    });
+
+  const handleImportFolder = () =>
+    runAction(async () => {
+      const pick = await apiPost<{ path: string | null }>('/api/dialog/pick-folder', {
+        title: t.importFolder,
+      });
+      if (!pick.path) return;
+      const res = await apiPost<{ name: string }>('/api/mods/import', {
+        sourcePath: pick.path,
+        force: true,
+      });
+      onNotify(fmt(t.toastImportedMod, { name: res.name }), 'ok');
+    });
+
+  const handlePackWorkspace = () =>
+    runAction(async () => {
+      const save = await apiPost<{ path: string | null }>('/api/dialog/save-zip', {
+        title: t.packWorkspace,
+        suggestedName: `ygo-modpack-v${status.activeBaseGameVersion ?? '1.0.0'}.zip`,
+      });
+      if (!save.path) return;
+      const res = await apiPost<{ zipPath: string; modCount: number }>('/api/workspace/pack', {
+        outputPath: save.path,
+        enabledOnly: false,
+      });
+      onNotify(fmt(t.toastPackedWs, { count: res.modCount, path: res.zipPath }), 'ok');
+    });
+
+  const handlePackSingle = (mod: ModEntry) =>
+    runAction(async () => {
+      const save = await apiPost<{ path: string | null }>('/api/dialog/save-zip', {
+        title: t.packZip,
+        suggestedName: `${mod.id}-v${mod.version}.zip`,
+      });
+      if (!save.path) return;
+      const res = await apiPost<{ zipPath: string }>('/api/mods/pack', {
+        modId: mod.id,
+        outputPath: save.path,
+      });
+      onNotify(fmt(t.toastPackedMod, { name: mod.name, path: res.zipPath }), 'ok');
+    });
+
+  const handleToggle = (modId: string, enabled: boolean) =>
+    runAction(async () => {
+      await apiPost('/api/mods/toggle', { modId, enabled });
+    });
+
+  const handleReorderByIds = (orderedIds: string[]) =>
+    runAction(async () => {
+      await apiPost('/api/mods/reorder', { orderedIds });
+      onNotify(t.toastReordered, 'ok');
+    });
+
+  const handleMove = (modId: string, delta: number) => {
+    const index = status.mods.findIndex((m) => m.id === modId);
+    const next = index + delta;
+    if (index < 0 || next < 0 || next >= status.mods.length) return;
+    const ids = status.mods.map((m) => m.id);
+    const [moved] = ids.splice(index, 1);
+    ids.splice(next, 0, moved);
+    handleReorderByIds(ids);
+  };
+
+  const handleDelete = (mod: ModEntry) => {
+    if (!window.confirm(fmt(t.confirmDeleteMod, { name: mod.name, id: mod.id }))) return;
+    runAction(async () => {
+      await apiPost('/api/mods/delete', { modId: mod.id });
+      onNotify(fmt(t.toastDeletedMod, { id: mod.id }), 'info');
+    });
+  };
+
+  const handleSaveMetadata = () => {
+    if (!selectedMod) return;
+    runAction(async () => {
+      await apiPost('/api/mods/metadata', {
+        modId: selectedMod.id,
+        name: metaForm.name,
+        version: metaForm.version,
+        author: metaForm.author,
+        category: metaForm.category,
+        minGameVersion: metaForm.minGameVersion,
+        tagsCsv: metaForm.tagsCsv,
+        description: metaForm.description,
+        autoDiscoverEntries: metaForm.autoDiscoverEntries,
+      });
+      setEditingMeta(false);
+      onNotify(fmt(t.toastMetadataSaved, { id: selectedMod.id }), 'ok');
+    });
+  };
+
+  const handlePickCover = (mod: ModEntry) =>
+    runAction(async () => {
+      const pick = await apiPost<{ path: string | null }>('/api/dialog/pick-file', {
+        title: t.changeCover,
+        kind: 'image',
+      });
+      if (!pick.path) return;
+      await apiPost('/api/mods/metadata', {
+        modId: mod.id,
+        coverSourcePath: pick.path,
+      });
+      onNotify(fmt(t.toastCoverUpdated, { id: mod.id }), 'ok');
+    });
+
+  const handleClearCover = (mod: ModEntry) =>
+    runAction(async () => {
+      await apiPost('/api/mods/metadata', {
+        modId: mod.id,
+        clearCover: true,
+      });
+      onNotify(fmt(t.toastMetadataSaved, { id: mod.id }), 'info');
+    });
+
+  const handleUploadDroppedCover = (modId: string, file: File) =>
+    runAction(async () => {
+      await apiUploadBinary(
+        `/api/mods/cover-upload?modId=${encodeURIComponent(modId)}&fileName=${encodeURIComponent(file.name)}`,
+        file,
+      );
+      onSelectMod(modId);
+      onNotify(fmt(t.toastCoverUpdated, { id: modId }), 'ok');
+    });
+
+  const handleUploadDroppedArchives = (files: File[]) =>
+    runAction(async () => {
+      for (const file of files) {
+        if (!isArchiveFileName(file.name)) continue;
+        const res = await apiUploadBinary<{
+          isWorkspacePack: boolean;
+          isYpk?: boolean;
+          name: string;
+          count?: number;
+          modId?: string;
+          cardCount?: number;
+          scriptCount?: number;
+          artCount?: number;
+        }>(`/api/mods/import-upload?fileName=${encodeURIComponent(file.name)}`, file);
+        if (res.modId) onSelectMod(res.modId);
+        onNotify(
+          res.isYpk
+            ? fmt(t.toastImportedYpk, {
+                name: res.name,
+                cards: res.cardCount ?? 0,
+                scripts: res.scriptCount ?? 0,
+                art: res.artCount ?? 0,
+              })
+            : res.isWorkspacePack
+              ? fmt(t.toastImportedPack, { name: res.name, count: res.count ?? 0 })
+              : fmt(t.toastImportedMod, { name: res.name }),
+          'ok',
+        );
+      }
+    });
+
+  // ---- Drag & Drop Handlers ----
+  const handleExternalDragEnter = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    externalDragDepthRef.current += 1;
+    setIsDraggingExternalFile(true);
+  };
+
+  const handleExternalDragOver = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  };
+
+  const handleExternalDragLeave = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    externalDragDepthRef.current = Math.max(0, externalDragDepthRef.current - 1);
+    if (externalDragDepthRef.current === 0) {
+      setIsDraggingExternalFile(false);
+    }
+  };
+
+  const handleExternalDropOnLibrary = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    externalDragDepthRef.current = 0;
+    setIsDraggingExternalFile(false);
+
+    const files = Array.from(e.dataTransfer.files || []);
+    const archives = files.filter((f) => isArchiveFileName(f.name));
+    if (archives.length > 0) {
+      handleUploadDroppedArchives(archives);
+      return;
+    }
+
+    const firstImg = files.find((f) => isImageFileName(f.name));
+    if (firstImg && selectedMod) {
+      handleUploadDroppedCover(selectedMod.id, firstImg);
+    }
+  };
+
+  const handleRowDragStart = (e: React.DragEvent, modId: string) => {
+    setDraggingModId(modId);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('application/x-ygo-mod-id', modId);
+    e.dataTransfer.setData('text/plain', modId);
+  };
+
+  const handleRowDragOver = (e: React.DragEvent, targetModId: string) => {
+    const isFiles = e.dataTransfer.types.includes('Files');
+    if (isFiles) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      setDropTargetModId(targetModId);
+      return;
+    }
+    if (!draggingModId || draggingModId === targetModId) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const pos = e.clientY - rect.top < rect.height / 2 ? 'before' : 'after';
+    setDropTargetModId(targetModId);
+    setDropPosition(pos);
+  };
+
+  const handleRowDrop = (e: React.DragEvent, targetModId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Check if user dropped an external image or zip onto a specific MOD row
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      externalDragDepthRef.current = 0;
+      setIsDraggingExternalFile(false);
+      setDropTargetModId(null);
+      const files = Array.from(e.dataTransfer.files);
+      const img = files.find((f) => isImageFileName(f.name));
+      if (img) {
+        handleUploadDroppedCover(targetModId, img);
+        return;
+      }
+      const archives = files.filter((f) => isArchiveFileName(f.name));
+      if (archives.length > 0) {
+        handleUploadDroppedArchives(archives);
+      }
+      return;
+    }
+
+    const sourceId = draggingModId || e.dataTransfer.getData('application/x-ygo-mod-id');
+    setDraggingModId(null);
+    setDropTargetModId(null);
+    if (!sourceId || sourceId === targetModId) return;
+
+    const ids = status.mods.map((m) => m.id);
+    const fromIdx = ids.indexOf(sourceId);
+    const toIdxOriginal = ids.indexOf(targetModId);
+    if (fromIdx < 0 || toIdxOriginal < 0) return;
+
+    ids.splice(fromIdx, 1);
+    const adjustedTargetIdx = ids.indexOf(targetModId);
+    const insertAt = dropPosition === 'after' ? adjustedTargetIdx + 1 : adjustedTargetIdx;
+    ids.splice(insertAt, 0, sourceId);
+    handleReorderByIds(ids);
+  };
+
+  const handleCategoryChipDrop = (e: React.DragEvent, cat: ModCategoryKey) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDropTargetCategory(null);
+    if (cat === 'all') return;
+    const sourceId = draggingModId || e.dataTransfer.getData('application/x-ygo-mod-id');
+    setDraggingModId(null);
+    if (!sourceId) return;
+    const mod = status.mods.find((m) => m.id === sourceId);
+    if (!mod) return;
+
+    runAction(async () => {
+      await apiPost('/api/mods/metadata', {
+        modId: mod.id,
+        category: cat,
+      });
+      onNotify(
+        fmt(t.toastCategoryMoved, { name: mod.name, cat: getModCategoryLabel(cat, t) }),
+        'ok',
+      );
+    });
+  };
+
+  const handleCoverBannerDrop = (e: React.DragEvent, mod: ModEntry) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setCoverDropHover(false);
+    externalDragDepthRef.current = 0;
+    setIsDraggingExternalFile(false);
+    const file = Array.from(e.dataTransfer.files || []).find((f) => isImageFileName(f.name));
+    if (file) {
+      handleUploadDroppedCover(mod.id, file);
+    }
+  };
+
+  return (
+    <div
+      className="relative flex h-full min-h-0 flex-1 overflow-hidden"
+      onDragEnter={handleExternalDragEnter}
+      onDragOver={handleExternalDragOver}
+      onDragLeave={handleExternalDragLeave}
+      onDrop={handleExternalDropOnLibrary}
+    >
+      {/* External File Drag-and-Drop Overlay */}
+      {isDraggingExternalFile && (
+        <div className="pointer-events-none absolute inset-2 z-30 flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-accent bg-background/85 backdrop-blur-md">
+          <Upload className="mb-2 size-10 text-accent" />
+          <p className="text-sm font-semibold text-foreground">{t.dragDropOverlayTitle}</p>
+          <p className="mt-1 text-xs text-muted">{t.dragDropOverlayHint}</p>
+        </div>
+      )}
+
+      {/* Center Pane */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* Slim Inline Toolbar */}
+        <div className="flex h-11 shrink-0 items-center gap-1.5 overflow-x-auto border-b border-border bg-background px-3">
+          <Button size="sm" variant="primary" onPress={onOpenNewModModal} className="h-7 shrink-0 text-xs">
+            <Plus className="size-3.5" />
+            {t.newMod}
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            isDisabled={busyAction}
+            onPress={() => runAction(onCreateExampleMod)}
+            className="h-7 shrink-0 text-xs"
+          >
+            <Sparkles className="size-3.5 text-warning" />
+            {t.createExampleMod}
+          </Button>
+          <Button size="sm" variant="secondary" isDisabled={busyAction} onPress={handleImportZip} className="h-7 shrink-0 text-xs">
+            <Upload className="size-3.5 text-accent" />
+            {t.importZip}
+          </Button>
+          <Button size="sm" variant="secondary" isDisabled={busyAction} onPress={handleImportFolder} className="h-7 shrink-0 text-xs">
+            <FolderInput className="size-3.5 text-accent" />
+            {t.importFolder}
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            isDisabled={busyAction || status.mods.length === 0}
+            onPress={handlePackWorkspace}
+            className="h-7 shrink-0 text-xs"
+          >
+            <Archive className="size-3.5 text-warning" />
+            {t.packWorkspace}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onPress={onOpenModGuide}
+            className="h-7 shrink-0 text-xs text-accent hover:bg-accent/10"
+          >
+            <BookOpen className="size-3.5" />
+            {t.modGuideBtn}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onPress={onCopyAiPrompt}
+            className="h-7 shrink-0 text-xs text-warning hover:bg-warning/10"
+          >
+            <Bot className="size-3.5" />
+            {t.copyAiSuperPromptBtn}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onPress={() => apiPost('/api/shell/open-folder', { path: status.modsRoot })}
+            className="h-7 shrink-0 text-xs text-muted hover:text-foreground"
+          >
+            <FolderOpen className="size-3.5" />
+            {t.openModsDir}
+          </Button>
+
+          <Separator orientation="vertical" className="mx-1 h-4" />
+
+          <Button size="sm" variant="ghost" isDisabled={busyAction} onPress={() => handleToggle('all', true)} className="h-7 shrink-0 text-xs">
+            <CheckSquare className="size-3.5 text-success" />
+            {t.enableAll}
+          </Button>
+          <Button size="sm" variant="ghost" isDisabled={busyAction} onPress={() => handleToggle('all', false)} className="h-7 shrink-0 text-xs">
+            <Square className="size-3.5 text-muted" />
+            {t.disableAll}
+          </Button>
+          <Button isIconOnly size="sm" variant="ghost" aria-label={t.refresh} onPress={() => onRefresh()} className="ml-auto size-7 shrink-0">
+            <RefreshCw className="size-3.5" />
+          </Button>
+        </div>
+
+        {/* Category Filter & Search Strip (supports Drag MOD onto Category Chip!) */}
+        <div className="shrink-0 space-y-2 border-b border-border/80 bg-surface/35 px-3 py-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {MOD_CATEGORY_LIST.map((cat) => {
+              const count = categoryCounts[cat] ?? 0;
+              if (cat !== 'all' && count === 0 && !draggingModId && activeCategory !== cat) {
+                return null;
+              }
+              const isActive = activeCategory === cat;
+              const isDropHover = dropTargetCategory === cat && cat !== 'all';
+              return (
+                <button
+                  key={cat}
+                  type="button"
+                  onClick={() => setActiveCategory(cat)}
+                  onDragOver={(e) => {
+                    if (cat === 'all' || !draggingModId) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    setDropTargetCategory(cat);
+                  }}
+                  onDragLeave={() => {
+                    if (dropTargetCategory === cat) setDropTargetCategory(null);
+                  }}
+                  onDrop={(e) => handleCategoryChipDrop(e, cat)}
+                  className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium transition-all ${
+                    isDropHover
+                      ? 'scale-105 border-warning bg-warning/20 text-warning shadow-sm'
+                      : isActive
+                        ? 'border-accent/75 bg-accent/15 text-accent'
+                        : 'border-border/70 bg-surface text-muted hover:border-border hover:text-foreground'
+                  }`}
+                >
+                  {cat !== 'all' && getCategoryIcon(cat)}
+                  <span>{getModCategoryLabel(cat, t)}</span>
+                  <span className="font-mono text-[10px] opacity-75">{count}</span>
+                </button>
+              );
+            })}
+
+            <div className="relative ml-auto min-w-[180px] flex-1 sm:max-w-[260px]">
+              <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={t.searchModsPlaceholder}
+                className="h-7 w-full rounded-lg border border-border/80 bg-background pr-7 pl-8 text-xs text-foreground placeholder:text-muted/70 focus:border-accent focus:outline-none"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute top-1/2 right-2 -translate-y-1/2 text-muted hover:text-foreground"
+                >
+                  <X className="size-3" />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Load Order & Draggable List */}
+        <div className="min-h-0 flex-1 overflow-y-auto p-3 space-y-2">
+          <div className="flex items-center justify-between gap-2 px-1 pb-0.5 text-[11px] text-muted">
+            <span className="truncate">{t.dragOrderHint}</span>
+            <span className="shrink-0 font-mono">
+              {status.mods.filter((m) => m.enabled).length} / {status.mods.length}
+            </span>
+          </div>
+
+          {filteredMods.length === 0 ? (
+            <div className="flex h-64 flex-col items-center justify-center text-center">
+              <Package className="mb-3 size-9 text-muted/35" />
+              <p className="text-sm font-semibold text-foreground">{t.noModsTitle}</p>
+              <p className="mt-1 text-xs text-muted">{t.noModsHint}</p>
+              {status.mods.length === 0 && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="mt-3"
+                  onPress={() => runAction(onCreateExampleMod)}
+                >
+                  <Sparkles className="size-3.5 text-warning" />
+                  {t.createExampleMod}
+                </Button>
+              )}
+            </div>
+          ) : (
+            filteredMods.map((mod) => {
+              const globalIdx = status.mods.findIndex((m) => m.id === mod.id);
+              const isSelected = selectedMod?.id === mod.id;
+              const hasConflict = conflictModIds.has(mod.id.toLowerCase());
+              const verWarn = versionIssueMap.get(mod.id.toLowerCase());
+              const isDragging = draggingModId === mod.id;
+              const isDropTarget = dropTargetModId === mod.id && draggingModId !== mod.id;
+              const cat = mod.effectiveCategory || 'other';
+
+              return (
+                <div
+                  key={mod.id}
+                  draggable={!busyAction}
+                  onDragStart={(e) => handleRowDragStart(e, mod.id)}
+                  onDragOver={(e) => handleRowDragOver(e, mod.id)}
+                  onDragLeave={() => {
+                    if (dropTargetModId === mod.id) setDropTargetModId(null);
+                  }}
+                  onDrop={(e) => handleRowDrop(e, mod.id)}
+                  onDragEnd={() => {
+                    setDraggingModId(null);
+                    setDropTargetModId(null);
+                    setDropTargetCategory(null);
+                  }}
+                  onClick={() => onSelectMod(mod.id)}
+                  className={`group relative flex cursor-pointer items-center gap-2.5 rounded-xl border px-2.5 py-2 transition-all ${
+                    isDragging ? 'opacity-45 scale-[0.99]' : ''
+                  } ${
+                    isSelected
+                      ? 'border-accent/80 bg-accent-soft/40'
+                      : 'border-border/75 bg-surface hover:border-border hover:bg-surface-secondary/70'
+                  } ${
+                    isDropTarget && dropPosition === 'before'
+                      ? 'ring-2 ring-accent/70 border-t-accent'
+                      : isDropTarget && dropPosition === 'after'
+                        ? 'ring-2 ring-warning/70 border-b-warning'
+                        : ''
+                  }`}
+                >
+                  {/* Drag Handle */}
+                  <div
+                    className="flex shrink-0 cursor-grab items-center text-muted/60 hover:text-foreground active:cursor-grabbing"
+                    title={t.dragOrderHint}
+                  >
+                    <GripVertical className="size-4" />
+                  </div>
+
+                  {/* Enable Checkbox */}
+                  <div onClick={(e) => e.stopPropagation()}>
+                    <Checkbox
+                      aria-label={`Enable ${mod.name}`}
+                      isSelected={mod.enabled}
+                      onChange={(checked) => handleToggle(mod.id, checked)}
+                    >
+                      <Checkbox.Content>
+                        <Checkbox.Control>
+                          <Checkbox.Indicator />
+                        </Checkbox.Control>
+                      </Checkbox.Content>
+                    </Checkbox>
+                  </div>
+
+                  {/* Order Badge */}
+                  <span className="inline-flex h-5 min-w-6 shrink-0 items-center justify-center rounded-md bg-surface-secondary px-1.5 font-mono text-[11px] font-semibold text-muted">
+                    #{globalIdx + 1}
+                  </span>
+
+                  {/* 44x44 Cover Art Thumbnail */}
+                  <div className="relative size-11 shrink-0 overflow-hidden rounded-lg border border-border/80 bg-surface-secondary flex items-center justify-center">
+                    {mod.coverUrl ? (
+                      <img
+                        src={resolveApiUrl(mod.coverUrl)}
+                        alt={mod.name}
+                        className="h-full w-full object-cover"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center text-muted/60">
+                        {getCategoryIcon(cat)}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Main MOD Info */}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="truncate text-[13px] font-semibold text-foreground">{mod.name}</span>
+                      <span className="font-mono text-[11px] text-muted">v{mod.version}</span>
+                      <Chip size="sm" color={getCategoryAccent(cat)} variant="soft" className="h-4">
+                        <Chip.Label className="text-[10px]">{getModCategoryLabel(cat, t)}</Chip.Label>
+                      </Chip>
+                      {mod.settingsCount > 0 && (
+                        <Chip size="sm" color="success" variant="soft" className="h-4">
+                          <Chip.Label className="text-[10px]">
+                            F9 · {fmt(t.badgeSettings, { n: mod.settingsCount })}
+                          </Chip.Label>
+                        </Chip>
+                      )}
+                      {mod.stats.hasLuaDsl && (
+                        <Chip size="sm" color="accent" variant="soft" className="h-4">
+                          Lua DSL
+                        </Chip>
+                      )}
+                      {mod.stats.hasJsDsl && (
+                        <Chip size="sm" color="warning" variant="soft" className="h-4">
+                          JS DSL
+                        </Chip>
+                      )}
+                      {hasConflict && (
+                        <Chip size="sm" color="warning" variant="primary" className="h-4">
+                          {t.badgeConflict}
+                        </Chip>
+                      )}
+                      {verWarn && (
+                        <Chip size="sm" color="danger" variant="primary" className="h-4">
+                          {t.badgeVersionWarn}
+                        </Chip>
+                      )}
+                    </div>
+                    <p className="mt-0.5 truncate text-[11px] text-muted">{summarizeModStats(mod, t)}</p>
+                  </div>
+
+                  {/* Row Actions */}
+                  <div
+                    className="flex shrink-0 items-center gap-1 opacity-75 group-hover:opacity-100"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Button
+                      isIconOnly
+                      size="sm"
+                      variant="ghost"
+                      aria-label={t.moveUp}
+                      isDisabled={globalIdx <= 0 || busyAction}
+                      onPress={() => handleMove(mod.id, -1)}
+                      className="size-7"
+                    >
+                      <ArrowUp className="size-3.5" />
+                    </Button>
+                    <Button
+                      isIconOnly
+                      size="sm"
+                      variant="ghost"
+                      aria-label={t.moveDown}
+                      isDisabled={globalIdx >= status.mods.length - 1 || busyAction}
+                      onPress={() => handleMove(mod.id, 1)}
+                      className="size-7"
+                    >
+                      <ArrowDown className="size-3.5" />
+                    </Button>
+                    <Button
+                      isIconOnly
+                      size="sm"
+                      variant="danger-soft"
+                      aria-label={t.deleteMod}
+                      isDisabled={busyAction}
+                      onPress={() => handleDelete(mod)}
+                      className="size-7"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      {/* Right Collapsible Inspector Drawer */}
+      {inspectorOpen && (
+        <aside className="fixed inset-y-0 top-10 right-0 z-20 flex w-full max-w-[430px] shrink-0 flex-col gap-3 overflow-y-auto border-l border-border bg-background p-3.5 shadow-2xl lg:static lg:z-auto lg:w-[390px] lg:max-w-none lg:bg-surface/40 lg:shadow-none xl:w-[430px]">
+          {selectedMod && (
+            <>
+              <Card variant="default" className="overflow-hidden p-0 gap-0">
+                {/* Interactive Cover Banner (Click or Drag-Drop Image to Set Cover!) */}
+                <div
+                  onClick={() => handlePickCover(selectedMod)}
+                  onDragOver={(e) => {
+                    if (!e.dataTransfer.types.includes('Files')) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setCoverDropHover(true);
+                  }}
+                  onDragLeave={() => setCoverDropHover(false)}
+                  onDrop={(e) => handleCoverBannerDrop(e, selectedMod)}
+                  className={`group/cover relative h-32 w-full cursor-pointer overflow-hidden border-b border-border/80 bg-gradient-to-br from-surface-secondary via-background to-accent-soft/25 transition-all ${
+                    coverDropHover ? 'ring-2 ring-inset ring-accent' : ''
+                  }`}
+                >
+                  {selectedMod.coverUrl ? (
+                    <img
+                      src={resolveApiUrl(selectedMod.coverUrl)}
+                      alt={selectedMod.name}
+                      className="h-full w-full object-cover transition-transform duration-300 group-hover/cover:scale-[1.03]"
+                    />
+                  ) : (
+                    <div className="flex h-full w-full flex-col items-center justify-center gap-1.5 text-muted/70">
+                      <ImagePlus className="size-7 text-accent/70" />
+                      <span className="text-[11px]">{t.dropCoverHint}</span>
+                    </div>
+                  )}
+
+                  {/* Cover Action Overlay */}
+                  <div
+                    className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-gradient-to-t from-black/80 via-black/45 to-transparent px-3 py-2"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Chip size="sm" color={getCategoryAccent(selectedMod.effectiveCategory)} variant="primary" className="h-5">
+                      <Chip.Label className="text-[10px]">
+                        {getModCategoryLabel(selectedMod.effectiveCategory, t)}
+                      </Chip.Label>
+                    </Chip>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        isDisabled={busyAction}
+                        onPress={() => handlePickCover(selectedMod)}
+                        className="h-6 px-2 text-[11px]"
+                      >
+                        <ImagePlus className="size-3" />
+                        {t.changeCover}
+                      </Button>
+                      {selectedMod.cover && (
+                        <Button
+                          size="sm"
+                          variant="danger-soft"
+                          isDisabled={busyAction}
+                          onPress={() => handleClearCover(selectedMod)}
+                          className="h-6 px-1.5 text-[11px]"
+                        >
+                          <X className="size-3" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-3.5 space-y-3">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Chip size="sm" color="accent" variant="soft">
+                      <Chip.Label className="font-mono text-[10px]">ID: {selectedMod.id}</Chip.Label>
+                    </Chip>
+                    <Chip size="sm" variant="soft">
+                      <Chip.Label className="font-mono text-[10px]">v{selectedMod.version}</Chip.Label>
+                    </Chip>
+                    {selectedMod.gameVersion && (
+                      <Chip size="sm" color="success" variant="soft">
+                        {t.badgeGameVer} {selectedMod.gameVersion}
+                      </Chip>
+                    )}
+                    {selectedMod.minGameVersion && (
+                      <Chip size="sm" color="warning" variant="soft">
+                        {t.badgeMinVer} {selectedMod.minGameVersion}
+                      </Chip>
+                    )}
+                  </div>
+
+                  {!editingMeta ? (
+                    <>
+                      <Card.Header className="p-0 gap-0.5">
+                        <div className="flex items-start justify-between gap-2">
+                          <Card.Title className="text-sm">{selectedMod.name}</Card.Title>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onPress={() => setEditingMeta(true)}
+                            className="h-6 shrink-0 px-2 text-[11px] text-accent"
+                          >
+                            <Pencil className="size-3" />
+                            {t.editMetadata}
+                          </Button>
+                        </div>
+                        <Card.Description className="text-xs">
+                          {t.authorLabel}: {selectedMod.author || t.authorCommunity}
+                        </Card.Description>
+                      </Card.Header>
+
+                      <Card.Content className="p-0 space-y-2">
+                        {selectedMod.description && (
+                          <p className="text-xs leading-relaxed text-foreground/85">{selectedMod.description}</p>
+                        )}
+                        {selectedMod.tags.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {selectedMod.tags.map((tag) => (
+                              <Chip key={tag} size="sm" variant="soft" className="h-4">
+                                <Chip.Label className="font-mono text-[10px]">#{tag}</Chip.Label>
+                              </Chip>
+                            ))}
+                          </div>
+                        )}
+                        <Surface
+                          variant="secondary"
+                          className="rounded-lg border border-border/60 px-2.5 py-2 font-mono text-[11px] text-success-soft-foreground"
+                        >
+                          {summarizeModStats(selectedMod, t)}
+                        </Surface>
+                      </Card.Content>
+                    </>
+                  ) : (
+                    <div className="space-y-2.5 rounded-xl border border-accent/40 bg-surface-secondary/50 p-2.5">
+                      <TextField
+                        fullWidth
+                        variant="secondary"
+                        value={metaForm.name}
+                        onChange={(v) => setMetaForm((f) => ({ ...f, name: v }))}
+                      >
+                        <Label className="text-[11px]">{t.modalDisplayName}</Label>
+                        <Input className="h-7 text-xs" />
+                      </TextField>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <div className="mb-1 text-[11px] font-medium text-foreground/85">{t.modCategoryLabel}</div>
+                          <Select
+                            aria-label={t.modCategoryLabel}
+                            fullWidth
+                            variant="secondary"
+                            value={metaForm.category}
+                            onChange={(k) => k && setMetaForm((f) => ({ ...f, category: String(k) }))}
+                          >
+                            <Select.Trigger className="h-7 text-xs">
+                              <Select.Value />
+                              <Select.Indicator />
+                            </Select.Trigger>
+                            <Select.Popover>
+                              <ListBox>
+                                <ListBox.Item id="auto" textValue={t.modCatAuto}>
+                                  {t.modCatAuto}
+                                  <ListBox.ItemIndicator />
+                                </ListBox.Item>
+                                {MOD_CATEGORY_LIST.filter((c) => c !== 'all').map((cat) => (
+                                  <ListBox.Item key={cat} id={cat} textValue={getModCategoryLabel(cat, t)}>
+                                    {getModCategoryLabel(cat, t)}
+                                    <ListBox.ItemIndicator />
+                                  </ListBox.Item>
+                                ))}
+                              </ListBox>
+                            </Select.Popover>
+                          </Select>
+                        </div>
+
+                        <TextField
+                          fullWidth
+                          variant="secondary"
+                          value={metaForm.version}
+                          onChange={(v) => setMetaForm((f) => ({ ...f, version: v }))}
+                        >
+                          <Label className="text-[11px]">Version</Label>
+                          <Input className="h-7 font-mono text-xs" />
+                        </TextField>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <TextField
+                          fullWidth
+                          variant="secondary"
+                          value={metaForm.author}
+                          onChange={(v) => setMetaForm((f) => ({ ...f, author: v }))}
+                        >
+                          <Label className="text-[11px]">{t.modalAuthor}</Label>
+                          <Input className="h-7 text-xs" />
+                        </TextField>
+                        <TextField
+                          fullWidth
+                          variant="secondary"
+                          value={metaForm.minGameVersion}
+                          onChange={(v) => setMetaForm((f) => ({ ...f, minGameVersion: v }))}
+                        >
+                          <Label className="text-[11px]">{t.modalMinGameVer}</Label>
+                          <Input className="h-7 font-mono text-xs" placeholder="0.2.46" />
+                        </TextField>
+                      </div>
+
+                      <TextField
+                        fullWidth
+                        variant="secondary"
+                        value={metaForm.tagsCsv}
+                        onChange={(v) => setMetaForm((f) => ({ ...f, tagsCsv: v }))}
+                      >
+                        <Label className="text-[11px]">{t.modTagsLabel}</Label>
+                        <Input className="h-7 font-mono text-xs" placeholder="cards, lua, settings" />
+                      </TextField>
+
+                      <TextField
+                        fullWidth
+                        variant="secondary"
+                        value={metaForm.description}
+                        onChange={(v) => setMetaForm((f) => ({ ...f, description: v }))}
+                      >
+                        <Label className="text-[11px]">{t.modalDescription}</Label>
+                        <Input className="h-7 text-xs" />
+                      </TextField>
+
+                      <Switch
+                        size="sm"
+                        isSelected={metaForm.autoDiscoverEntries}
+                        onChange={(checked) => setMetaForm((f) => ({ ...f, autoDiscoverEntries: checked }))}
+                      >
+                        <Switch.Content>
+                          <Switch.Control>
+                            <Switch.Thumb />
+                          </Switch.Control>
+                          <div className="min-w-0">
+                            <span className="block text-[11px] font-medium text-foreground">{t.autoEntriesLabel}</span>
+                            <span className="block text-[10px] text-muted">{t.autoEntriesHint}</span>
+                          </div>
+                        </Switch.Content>
+                      </Switch>
+
+                      <div className="flex items-center justify-end gap-1.5 pt-1">
+                        <Button size="sm" variant="secondary" onPress={() => setEditingMeta(false)} className="h-7 text-xs">
+                          {t.cancel}
+                        </Button>
+                        <Button size="sm" variant="primary" isDisabled={busyAction} onPress={handleSaveMetadata} className="h-7 text-xs">
+                          <Save className="size-3.5" />
+                          {t.saveMetadata}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
+                  <Card.Footer className="p-0 pt-1 flex flex-wrap gap-1.5">
+                    <Button size="sm" variant="primary" onPress={() => onOpenInStudio(selectedMod.id)} className="h-7 text-xs">
+                      <Palette className="size-3.5" />
+                      {t.editInStudio}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onPress={() => apiPost('/api/shell/open-folder', { path: selectedMod.directoryPath })}
+                      className="h-7 text-xs"
+                    >
+                      <FolderOpen className="size-3.5" />
+                      {t.openFolder}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      isDisabled={busyAction}
+                      onPress={() => handlePackSingle(selectedMod)}
+                      className="h-7 text-xs"
+                    >
+                      <Archive className="size-3.5 text-warning" />
+                      {t.packZip}
+                    </Button>
+                  </Card.Footer>
+                </div>
+              </Card>
+
+              {/* Auto-Imported Entries Inspector Card */}
+              <Card variant="default" className="p-3 gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                    <Code2 className="size-3.5 text-accent" />
+                    {t.autoEntriesTitle}
+                  </span>
+                  <Chip
+                    size="sm"
+                    color={selectedMod.autoDiscoverEntries ? 'success' : 'default'}
+                    variant="soft"
+                    className="h-4"
+                  >
+                    <Chip.Label className="text-[10px]">
+                      {selectedMod.autoDiscoverEntries ? 'AUTO' : 'MANUAL'}
+                    </Chip.Label>
+                  </Chip>
+                </div>
+
+                {selectedMod.resolvedJsEntries.length === 0 &&
+                selectedMod.resolvedCssEntries.length === 0 &&
+                selectedMod.resolvedLuaLibs.length === 0 ? (
+                  <p className="text-[11px] text-muted">{t.autoEntriesEmpty}</p>
+                ) : (
+                  <div className="space-y-1.5 text-[11px]">
+                    {selectedMod.resolvedJsEntries.map((entry) => (
+                      <div
+                        key={`js-${entry}`}
+                        className="flex items-center gap-1.5 rounded-md bg-surface-secondary/70 px-2 py-1 font-mono"
+                      >
+                        <Chip size="sm" color="warning" variant="soft" className="h-4 shrink-0">
+                          JS
+                        </Chip>
+                        <span className="truncate text-foreground/90">{entry}</span>
+                      </div>
+                    ))}
+                    {selectedMod.resolvedCssEntries.map((entry) => (
+                      <div
+                        key={`css-${entry}`}
+                        className="flex items-center gap-1.5 rounded-md bg-surface-secondary/70 px-2 py-1 font-mono"
+                      >
+                        <Chip size="sm" color="accent" variant="soft" className="h-4 shrink-0">
+                          CSS
+                        </Chip>
+                        <span className="truncate text-foreground/90">{entry}</span>
+                      </div>
+                    ))}
+                    {selectedMod.resolvedLuaLibs.map((entry) => (
+                      <div
+                        key={`lua-${entry}`}
+                        className="flex items-center gap-1.5 rounded-md bg-surface-secondary/70 px-2 py-1 font-mono"
+                      >
+                        <Chip size="sm" color="success" variant="soft" className="h-4 shrink-0">
+                          Lua Lib
+                        </Chip>
+                        <span className="truncate text-foreground/90">{entry}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+
+              {/* Complete MOD Hints & Spec Checklist */}
+              <Card variant="default" className="p-3 gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                    <Info className="size-3.5 text-accent" />
+                    {t.modHintsTitle}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onPress={onOpenModGuide}
+                    className="h-6 px-2 text-[11px] text-accent"
+                  >
+                    <BookOpen className="size-3" />
+                    {t.modGuideBtn}
+                  </Button>
+                </div>
+
+                <ul className="space-y-1.5 text-[11px] leading-relaxed">
+                  <li className="flex items-start gap-1.5 text-foreground/85">
+                    <CheckCircle2
+                      className={`mt-0.5 size-3.5 shrink-0 ${
+                        selectedMod.coverUrl ? 'text-success' : 'text-muted/50'
+                      }`}
+                    />
+                    <span>{selectedMod.coverUrl ? t.hintHasCover : t.hintNoCover}</span>
+                  </li>
+                  <li className="flex items-start gap-1.5 text-foreground/85">
+                    <CheckCircle2
+                      className={`mt-0.5 size-3.5 shrink-0 ${
+                        selectedMod.autoDiscoverEntries ? 'text-success' : 'text-warning'
+                      }`}
+                    />
+                    <span>
+                      {selectedMod.autoDiscoverEntries
+                        ? fmt(t.hintAutoEntriesOn, {
+                            js: selectedMod.resolvedJsEntries.length,
+                            css: selectedMod.resolvedCssEntries.length,
+                            lua: selectedMod.resolvedLuaLibs.length,
+                          })
+                        : t.hintAutoEntriesOff}
+                    </span>
+                  </li>
+                  <li className="flex items-start gap-1.5 text-foreground/85">
+                    <CheckCircle2
+                      className={`mt-0.5 size-3.5 shrink-0 ${
+                        selectedMod.settingsCount > 0 ? 'text-success' : 'text-muted/50'
+                      }`}
+                    />
+                    <span>
+                      {selectedMod.settingsCount > 0
+                        ? fmt(t.hintHasSettings, { n: selectedMod.settingsCount })
+                        : t.hintNoSettings}
+                    </span>
+                  </li>
+                  {selectedMod.stats.cardCount > 0 && selectedMod.stats.scriptCount < selectedMod.stats.cardCount && (
+                    <li className="flex items-start gap-1.5 text-warning">
+                      <Info className="mt-0.5 size-3.5 shrink-0" />
+                      <span>
+                        {fmt(t.hintMissingLua, {
+                          cards: selectedMod.stats.cardCount,
+                          scripts: selectedMod.stats.scriptCount,
+                        })}
+                      </span>
+                    </li>
+                  )}
+                </ul>
+              </Card>
+            </>
+          )}
+
+          {status.versionIssues.length > 0 && (
+            <Alert status="danger">
+              <Alert.Indicator />
+              <Alert.Content>
+                <Alert.Title className="text-xs">
+                  {t.versionIssuesTitle} ({status.versionIssues.length})
+                </Alert.Title>
+                <Alert.Description>
+                  <ul className="mt-1 space-y-1 text-[11px]">
+                    {status.versionIssues.map((v, i) => (
+                      <li key={`${v.modId}-${i}`}>
+                        <span className="font-semibold">{v.modName}:</span> {v.message}
+                      </li>
+                    ))}
+                  </ul>
+                </Alert.Description>
+              </Alert.Content>
+            </Alert>
+          )}
+
+          {status.conflicts.length === 0 ? (
+            <Alert status="success">
+              <Alert.Indicator />
+              <Alert.Content>
+                <Alert.Title className="text-xs">{t.conflictsTitle}</Alert.Title>
+                <Alert.Description className="text-[11px]">{t.noConflicts}</Alert.Description>
+              </Alert.Content>
+            </Alert>
+          ) : (
+            <Alert status="warning">
+              <Alert.Indicator />
+              <Alert.Content>
+                <Alert.Title className="text-xs">
+                  {t.conflictsTitle} ({status.conflicts.length})
+                </Alert.Title>
+                <Alert.Description>
+                  <div className="mt-1.5 max-h-48 overflow-y-auto space-y-1.5 pr-1">
+                    {status.conflicts.map((c, i) => (
+                      <div
+                        key={`${c.category}-${c.resourceKey}-${i}`}
+                        className="rounded-lg border border-warning/25 bg-surface/60 px-2 py-1.5 text-[11px]"
+                      >
+                        <div className="font-mono font-semibold text-foreground">
+                          [{c.category}] {c.resourceKey}
+                        </div>
+                        <div className="mt-0.5 text-muted">
+                          {c.modIds.join(' → ')} · {t.conflictWinner}:{' '}
+                          <span className="font-semibold text-success">{c.winnerModId}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </Alert.Description>
+              </Alert.Content>
+            </Alert>
+          )}
+        </aside>
+      )}
+    </div>
+  );
+}

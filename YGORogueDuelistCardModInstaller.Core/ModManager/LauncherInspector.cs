@@ -197,4 +197,103 @@ public static class LauncherInspector
         var text = Encoding.UTF8.GetString(replaysJsBytes);
         return ModPatcher.GetUtf8Bytes(AdaptReplayText(text));
     }
+
+    public static VanillaDllInspection? InspectDllDetailed(string? dllPath)
+    {
+        if (string.IsNullOrWhiteSpace(dllPath) || !File.Exists(dllPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            var bytes = File.ReadAllBytes(dllPath);
+            var fi = new FileInfo(dllPath);
+            var dllSha = ModPatcher.ComputeSha256Hex(bytes);
+            var meta = TryReadMetadata(dllPath);
+            var startupRes = TryLocateEmbeddedResource(bytes, "StartupHashes.json");
+            string? assemblyVersion = null;
+            string? assemblyName = null;
+            var embeddedResources = new List<string>();
+            var updateEndpoints = new List<string>();
+
+            using (var ms = new MemoryStream(bytes, writable: false))
+            using (var pe = new PEReader(ms))
+            {
+                if (pe.HasMetadata)
+                {
+                    var mr = pe.GetMetadataReader();
+                    if (mr.IsAssembly)
+                    {
+                        var ad = mr.GetAssemblyDefinition();
+                        assemblyName = mr.GetString(ad.Name);
+                        assemblyVersion = ad.Version.ToString();
+                    }
+
+                    foreach (var handle in mr.ManifestResources)
+                    {
+                        var r = mr.GetManifestResource(handle);
+                        embeddedResources.Add(mr.GetString(r.Name));
+                    }
+                }
+            }
+
+            // Extract official update endpoints declared inside the vanilla launcher DLL (read-only inspection)
+            var unicodeText = Encoding.Unicode.GetString(bytes);
+            foreach (var candidate in new[]
+                     {
+                         "https://api.github.com/repos/Thronior/ygo-rogue-duelist/releases/latest",
+                         "https://github.com/Thronior/ygo-rogue-duelist/releases/download/v",
+                         "windows-launcher.json",
+                         "YGO-Rogue-Windows-Setup.exe"
+                     })
+            {
+                if (unicodeText.Contains(candidate, StringComparison.OrdinalIgnoreCase))
+                {
+                    updateEndpoints.Add(candidate);
+                }
+            }
+
+            var hasBackup = File.Exists(dllPath + ".orig");
+            return new VanillaDllInspection(
+                FullPath: Path.GetFullPath(dllPath),
+                FileSizeBytes: fi.Length,
+                LastWriteTimeUtc: fi.LastWriteTimeUtc,
+                Sha256: dllSha,
+                AssemblyName: assemblyName ?? Path.GetFileNameWithoutExtension(dllPath),
+                AssemblyVersion: assemblyVersion ?? "unknown",
+                LauncherBuild: meta?.LauncherBuild ?? 0,
+                InitialBundleVersion: meta?.InitialBundleVersion ?? "unknown",
+                InitialBundleFileName: meta?.InitialBundleFileName ?? string.Empty,
+                InitialBundleSha256: meta?.InitialBundleSha256 ?? string.Empty,
+                HasStartupHashesResource: startupRes is not null,
+                StartupHashesSizeBytes: startupRes?.Length ?? 0,
+                HasBackupOrig: hasBackup,
+                EmbeddedResources: embeddedResources,
+                UpdateEndpoints: updateEndpoints,
+                DesktopBootScript: meta?.DesktopBootScript ?? string.Empty);
+        }
+        catch
+        {
+            return null;
+        }
+    }
 }
+
+public sealed record VanillaDllInspection(
+    string FullPath,
+    long FileSizeBytes,
+    DateTimeOffset LastWriteTimeUtc,
+    string Sha256,
+    string AssemblyName,
+    string AssemblyVersion,
+    int LauncherBuild,
+    string InitialBundleVersion,
+    string InitialBundleFileName,
+    string InitialBundleSha256,
+    bool HasStartupHashesResource,
+    int StartupHashesSizeBytes,
+    bool HasBackupOrig,
+    IReadOnlyList<string> EmbeddedResources,
+    IReadOnlyList<string> UpdateEndpoints,
+    string DesktopBootScript);

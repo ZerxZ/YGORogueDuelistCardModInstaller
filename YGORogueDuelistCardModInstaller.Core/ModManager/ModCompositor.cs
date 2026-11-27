@@ -506,7 +506,7 @@ public static class ModCompositor
                     interaction.Say($"i18n/zh.json: 注入模块化界面翻译 {extraUi.Count} 条");
                 }
 
-                // 12. JS ES Module plugins (js/** + DSL add_js_files + DSL Script Scope hooks) & CSS stylesheets (styles/** + DSL add_css_files)
+                // 12. JS ES Module plugins (js/** + DSL add_js_files + DSL Script Scope hooks), CSS stylesheets (styles/**, css/** + DSL add_css_files), and In-Game MOD Settings
                 var jsEntries = ModRepository.ResolveJsEntries(mod.DirectoryPath, mod.Manifest)
                     .Concat(dsl is not null
                         ? ModDslParser.ExpandGlobs(mod.DirectoryPath, dsl.JsGlobs)
@@ -521,13 +521,14 @@ public static class ModCompositor
                         : [])
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
+                var settingsSchema = ModRepository.ResolveSettingsSchema(mod.DirectoryPath, mod.Manifest);
                 var hasDslJsHooks = dsl?.HasGeneratedJsPlugin == true;
 
-                if (jsEntries.Count > 0 || cssEntries.Count > 0 || hasDslJsHooks)
+                if (jsEntries.Count > 0 || cssEntries.Count > 0 || hasDslJsHooks || settingsSchema is { Count: > 0 })
                 {
                     var bundlePrefix = $"mods/{mod.Id}";
 
-                    foreach (var sub in new[] { "js", "styles" })
+                    foreach (var sub in new[] { "js", "styles", "css" })
                     {
                         var subDir = Path.Combine(mod.DirectoryPath, sub);
                         if (!Directory.Exists(subDir)) continue;
@@ -569,10 +570,11 @@ public static class ModCompositor
                         Description = mod.Manifest.Description,
                         JsEntries = finalJsBundleEntries,
                         CssEntries = cssEntries.Select(e => $"{bundlePrefix}/{e}").ToList(),
-                        Config = mod.Manifest.Config?.DeepClone().AsObject()
+                        Config = mod.Manifest.Config?.DeepClone().AsObject(),
+                        SettingsSchema = settingsSchema?.DeepClone().AsArray()
                     });
 
-                    interaction.Say($"YgoModAPI: 注册前端插件（JS 入口 {finalJsBundleEntries.Count} 个，CSS 样式 {cssEntries.Count} 个）");
+                    interaction.Say($"YgoModAPI: 注册前端插件（自动导入 JS {finalJsBundleEntries.Count} 个，CSS {cssEntries.Count} 个，设置项 {settingsSchema?.Count ?? 0} 个）");
                 }
 
                 // 13. Loose overrides/**
@@ -598,10 +600,11 @@ public static class ModCompositor
             }
         }
 
-        // Built-in Developer Mode tools (F10 Dev Inspector + Sandbox Free Duel unlock + DEV quick bar)
+        // Built-in Developer Mode tools (F10 Developer Settings & Debug Mode + F8 Built-in Trainer + Sandbox Free Duel unlock)
         if (developerMode)
         {
             unlockAllVariantsJs = true;
+            enableBuiltInTrainerOverlay = true;
             var campObj = GetCampaign();
             var storage = campObj["storage.py"]!.GetValue<string>();
             const string devMark = "# mod-dev-mode:sandbox";
@@ -617,33 +620,45 @@ public static class ModCompositor
             runtimeDescriptors.Add(new ModRuntimeDescriptor
             {
                 Id = "_builtin-devtools",
-                Name = "MOD Developer Mode (F10)",
+                Name = "内置开发者设置 & 调试模式 (F10)",
                 Version = ModRuntimeGenerator.RuntimeVersion,
                 Author = "YGO Mod Manager",
-                Description = "Developer Inspector (F10), window.YgoModDev, Sandbox Free Duel unlock & quick reload bar.",
+                Description = "In-game Developer Settings, Debug Mode console/fetch/error trace, FPS HUD, State Inspector (F10) & Sandbox unlock.",
                 JsEntries = [ModRuntimeGenerator.DevToolsScriptPath],
                 CssEntries = []
             });
-            interaction.Say("Developer Mode: 已注入开发者工具栏（F10 诊断器 + 沙盒自由决斗解锁 + window.YgoModDev）");
+            interaction.Say("Developer Mode: 已注入内置开发者设置 & 调试模式（F10 调试终端/网络追踪/FPS）、内置修改器（F8）与沙盒自由决斗解锁");
         }
 
-        // Built-in F8 Trainer overlay if any trainer.json requested inGameOverlay: true
+        // Built-in F8 Trainer overlay (auto-enabled in Developer Mode or when any trainer.json sets inGameOverlay: true)
         if (enableBuiltInTrainerOverlay)
         {
+            // Inject real-time Python backend command ('mod-trainer') into mobile_backend.py so F8 Trainer
+            // writes through storage.py (valid SHA-256 + .bak) and updates live UI state with ZERO reload!
+            var campObj = GetCampaign();
+            if (campObj["mobile_backend.py"] is JsonValue mbVal && mbVal.TryGetValue<string>(out var mbCode))
+            {
+                const string trainerBackendMark = "# mod-trainer-backend:v2";
+                if (!mbCode.Contains(trainerBackendMark, StringComparison.Ordinal))
+                {
+                    campObj["mobile_backend.py"] = mbCode.TrimEnd() + "\n\n" + ModRuntimeGenerator.BuildTrainerBackendPythonHook();
+                }
+            }
+
             files[ModRuntimeGenerator.TrainerOverlayScriptPath] = ModPatcher.GetUtf8Bytes(ModRuntimeGenerator.BuildTrainerOverlayScript());
             newlyAdded.Add(ModRuntimeGenerator.TrainerOverlayScriptPath);
             runtimeDescriptors.Add(new ModRuntimeDescriptor
             {
                 Id = "_builtin-trainer",
-                Name = "Built-in Trainer Overlay (F8)",
+                Name = "内置游戏修改器 (F8)",
                 Version = ModRuntimeGenerator.RuntimeVersion,
                 Author = "YGO Mod Manager",
-                Description = "In-game F8 Trainer overlay for live gold/LP/card/relic editing.",
+                Description = "In-game F8 Trainer overlay with live Pyodide/SHA-256 save integration (gold, LP, cards, relics, packs, unlocks, instant win, QoL & save backup).",
                 JsEntries = [ModRuntimeGenerator.TrainerOverlayScriptPath],
                 CssEntries = [],
                 Config = trainerOverlayConfig
             });
-            interaction.Say("YgoModAPI: 已启用内置游戏内修改器面板（按 F8 呼出）");
+            interaction.Say("YgoModAPI: 已启用游戏内实时修改器（按 F8 呼出，直连游戏内核与 SHA-256 存档，修改即时生效）");
         }
 
         if (ensureGetId3Return && scripts is not null)

@@ -1,6 +1,6 @@
 <Solution>
   <Project Path="YGORogueDuelistCardModInstaller.Core/YGORogueDuelistCardModInstaller.Core.csproj" />
   <Project Path="YGORogueDuelistCardModInstaller/YGORogueDuelistCardModInstaller.csproj" />
-  <Project Path="YGORogueDuelistCardModInstaller.Avalonia/YGORogueDuelistCardModInstaller.Avalonia.csproj" />
+  <Project Path="YGORogueDuelistCardModInstaller.Desktop/YGORogueDuelistCardModInstaller.Desktop.csproj" />
   <Project Path="YGORogueDuelistCardModInstaller.Mcp/YGORogueDuelistCardModInstaller.Mcp.csproj" />
 </Solution>

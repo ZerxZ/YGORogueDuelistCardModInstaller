@@ -7,8 +7,9 @@ on:
     paths:
       - "YGORogueDuelistCardModInstaller/**"
       - "YGORogueDuelistCardModInstaller.Core/**"
-      - "YGORogueDuelistCardModInstaller.Avalonia/**"
+      - "YGORogueDuelistCardModInstaller.Desktop/**"
       - "YGORogueDuelistCardModInstaller.Mcp/**"
+      - "frontend/**"
       - "YGORogueDuelistCardModInstaller.slnx"
       - "Directory.Build.props"
       - "examples/**"
@@ -19,8 +20,9 @@ on:
     paths:
       - "YGORogueDuelistCardModInstaller/**"
       - "YGORogueDuelistCardModInstaller.Core/**"
-      - "YGORogueDuelistCardModInstaller.Avalonia/**"
+      - "YGORogueDuelistCardModInstaller.Desktop/**"
       - "YGORogueDuelistCardModInstaller.Mcp/**"
+      - "frontend/**"
       - "YGORogueDuelistCardModInstaller.slnx"
       - "Directory.Build.props"
       - "examples/**"
@@ -39,6 +41,26 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          cache-dependency-path: "frontend/pnpm-lock.yaml"
+
+      - name: Build React + CodeMirror 6 Frontend
+        shell: pwsh
+        run: |
+          Push-Location frontend
+          pnpm install --frozen-lockfile
+          pnpm build
+          Pop-Location
 
       - name: Setup .NET 10 SDK
         uses: actions/setup-dotnet@v4
@@ -62,11 +84,24 @@ jobs:
         shell: pwsh
         run: |
           dotnet publish YGORogueDuelistCardModInstaller/YGORogueDuelistCardModInstaller.csproj -c Release -r win-x64 -o dist/cli --nologo
-          dotnet publish YGORogueDuelistCardModInstaller.Avalonia/YGORogueDuelistCardModInstaller.Avalonia.csproj -c Release -r win-x64 -o dist/gui --nologo
+          dotnet publish YGORogueDuelistCardModInstaller.Desktop/YGORogueDuelistCardModInstaller.Desktop.csproj -c Release -r win-x64 -o dist/gui --nologo
           dotnet publish YGORogueDuelistCardModInstaller.Mcp/YGORogueDuelistCardModInstaller.Mcp.csproj -c Release -r win-x64 -o dist/mcp --nologo
 
-      - name: Smoke Test Native AOT CLI & MCP
+      - name: Smoke Test Native AOT CLI, MCP & Desktop REST API
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           ./dist/cli/YGORogueDuelistCardModInstaller.exe --help
           '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | ./dist/mcp/YGORogueDuelistCardModInstaller.Mcp.exe | Out-String | Write-Host
+
+          $proc = Start-Process -FilePath "./dist/gui/YGORogueDuelistCardModInstaller.Desktop.exe" -ArgumentList "--api-only" -PassThru
+          try {
+            Start-Sleep -Seconds 2
+            $health = Invoke-RestMethod -Uri "http://127.0.0.1:17850/api/health"
+            if (-not $health.ok) { throw "Desktop API health check failed" }
+            $html = (Invoke-WebRequest -Uri "http://127.0.0.1:17850/").Content
+            if (-not ($html -match '<div id="root">')) { throw "Embedded React index.html not served" }
+            Write-Host "Desktop Native AOT API + Embedded React verified OK (v$($health.version))"
+          } finally {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+          }

@@ -20,6 +20,7 @@ public sealed record InstallOptions
     public bool AssumeYes { get; init; }
 
     public const string DefaultRepo = "Thronior/ygo-rogue-duelist";
+    public const string DefaultManagerRepo = "ZerxZ/YGORogueDuelistCardModInstaller";
 }
 
 public sealed record UninstallOptions
@@ -52,6 +53,9 @@ public sealed class GitHubRelease
 {
     public string? TagName { get; set; }
     public string? Name { get; set; }
+    public string? Body { get; set; }
+    public string? PublishedAt { get; set; }
+    public string? HtmlUrl { get; set; }
     public bool Draft { get; set; }
     public List<GitHubAsset> Assets { get; set; } = [];
 
@@ -63,6 +67,12 @@ public sealed class GitHubAsset
     public string? Name { get; set; }
     public string? BrowserDownloadUrl { get; set; }
     public long Size { get; set; }
+    public string? Digest { get; set; }
+
+    public string? ExpectedSha256 =>
+        !string.IsNullOrWhiteSpace(Digest) && Digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase)
+            ? Digest["sha256:".Length..].Trim()
+            : null;
 }
 
 public sealed class ModOperationException : Exception

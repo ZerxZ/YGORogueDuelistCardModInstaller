@@ -298,7 +298,7 @@ public sealed partial class ModInjectionEngine
             }
 
             var repo = string.IsNullOrWhiteSpace(state.Repo) ? InstallOptions.DefaultRepo : state.Repo;
-            installDir = await GitHubReleaseService.GetOriginalGameAsync(repo, Repository.WorkspaceRoot, interaction, cancellationToken);
+            installDir = await GitHubReleaseService.GetOriginalGameAsync(repo, Repository.WorkspaceRoot, interaction, cancellationToken, state.GitHubProxy);
             state.InstallDir = installDir;
             Repository.SaveState(state);
         }
@@ -595,7 +595,9 @@ public sealed partial class ModInjectionEngine
 
     public async Task UpdateOfficialGameAsync(
         IInstallerInteraction interaction,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool preferWebBundle = true,
+        bool forceDownload = false)
     {
         var state = Repository.LoadState();
         var installDir = !string.IsNullOrWhiteSpace(state.InstallDir) && Directory.Exists(state.InstallDir)
@@ -603,12 +605,13 @@ public sealed partial class ModInjectionEngine
             : GameLocator.FindInstallDir();
         var gameBaseDir = ResolveGameBaseDir(state.GameDir);
         var repo = string.IsNullOrWhiteSpace(state.Repo) ? InstallOptions.DefaultRepo : state.Repo;
+        var proxy = state.GitHubProxy;
 
         await EnsureGameNotRunningAsync(forceKill: false, interaction, cancellationToken);
 
         if (string.IsNullOrWhiteSpace(installDir))
         {
-            installDir = await GitHubReleaseService.GetOriginalGameAsync(repo, Repository.WorkspaceRoot, interaction, cancellationToken);
+            installDir = await GitHubReleaseService.GetOriginalGameAsync(repo, Repository.WorkspaceRoot, interaction, cancellationToken, proxy);
             state.InstallDir = installDir;
             Repository.SaveState(state);
             interaction.Ok($"原版游戏已下载安装到：{installDir}");
@@ -621,15 +624,16 @@ public sealed partial class ModInjectionEngine
         var currentOfficialVersion = vanilla?.Version ?? meta?.InitialBundleVersion;
 
         interaction.ReportProgress("正在检查 GitHub 最新官方版本...", 15);
-        var release = await GitHubReleaseService.GetLatestReleaseAsync(repo, interaction, cancellationToken);
+        var release = await GitHubReleaseService.GetLatestReleaseAsync(repo, interaction, cancellationToken, proxy);
         var latestTag = release?.EffectiveTag;
         if (string.IsNullOrWhiteSpace(latestTag))
         {
-            interaction.Warn("无法获取 GitHub 最新版本信息。");
+            interaction.Warn("无法获取 GitHub 最新版本信息。如访问受限可在设置中启用代理加速（如 https://ghfast.top/）。");
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(currentOfficialVersion) &&
+        if (!forceDownload &&
+            !string.IsNullOrWhiteSpace(currentOfficialVersion) &&
             GameLocator.CompareVersionText(latestTag, currentOfficialVersion) <= 0)
         {
             interaction.Ok($"本机原版游戏（{currentOfficialVersion}）已是最新（GitHub 最新 {latestTag}）。");
@@ -637,8 +641,23 @@ public sealed partial class ModInjectionEngine
             return;
         }
 
-        interaction.Say($"检测到新版本 {latestTag}（本机原版：{currentOfficialVersion ?? "未知"}），开始下载并更新...");
-        var newDir = await GitHubReleaseService.InstallOriginalGameAsync(release!, repo, Repository.WorkspaceRoot, interaction, cancellationToken);
+        if (preferWebBundle && GitHubReleaseService.FindWebBundleAsset(release!) is not null)
+        {
+            interaction.Say($"检测到版本 {latestTag}（本机原版：{currentOfficialVersion ?? "未知"}），启用极速数据包更新（web-.zip + 断点续传）...");
+            await GitHubReleaseService.InstallWebBundleUpdateAsync(
+                release!,
+                gameBaseDir,
+                Path.Combine(Repository.WorkspaceRoot, "downloads"),
+                proxy,
+                interaction,
+                cancellationToken);
+            interaction.Ok($"原版数据包已更新至 {latestTag}！如需继续使用 MOD，请点击「应用注入」将全部 MOD 叠加到新版本。");
+            interaction.ReportProgress("更新完成", 100);
+            return;
+        }
+
+        interaction.Say($"检测到版本 {latestTag}（本机原版：{currentOfficialVersion ?? "未知"}），开始断点续传下载完整安装包...");
+        var newDir = await GitHubReleaseService.InstallOriginalGameAsync(release!, repo, Repository.WorkspaceRoot, interaction, cancellationToken, proxy);
         state.InstallDir = newDir;
         Repository.SaveState(state);
 

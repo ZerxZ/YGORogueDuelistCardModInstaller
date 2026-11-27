@@ -21,6 +21,9 @@ public sealed class ParsedModDsl
     public string? Version { get; set; }
     public string? Author { get; set; }
     public string? Description { get; set; }
+    public string? Category { get; set; }
+    public string? Cover { get; set; }
+    public bool? AutoDiscoverEntries { get; set; }
     public string? GameVersion { get; set; }
     public string? MinGameVersion { get; set; }
     public string? MaxGameVersion { get; set; }
@@ -160,6 +163,9 @@ public static class ModDslParser
         if (!string.IsNullOrWhiteSpace(dsl.Version)) manifest.Version = dsl.Version;
         if (!string.IsNullOrWhiteSpace(dsl.Author)) manifest.Author = dsl.Author;
         if (!string.IsNullOrWhiteSpace(dsl.Description)) manifest.Description = dsl.Description;
+        if (!string.IsNullOrWhiteSpace(dsl.Category)) manifest.Category = dsl.Category;
+        if (!string.IsNullOrWhiteSpace(dsl.Cover)) manifest.Cover = dsl.Cover;
+        if (dsl.AutoDiscoverEntries.HasValue) manifest.AutoDiscoverEntries = dsl.AutoDiscoverEntries.Value;
         if (!string.IsNullOrWhiteSpace(dsl.GameVersion)) manifest.GameVersion = dsl.GameVersion;
         if (!string.IsNullOrWhiteSpace(dsl.MinGameVersion)) manifest.MinGameVersion = dsl.MinGameVersion;
         if (!string.IsNullOrWhiteSpace(dsl.MaxGameVersion)) manifest.MaxGameVersion = dsl.MaxGameVersion;
@@ -418,6 +424,15 @@ public static class ModDslParser
                     continue;
                 case "set_author":
                     if (TryGetStr(rawArgs, 0, isJs, out var auth)) dsl.Author = auth;
+                    continue;
+                case "set_category":
+                    if (TryGetStr(rawArgs, 0, isJs, out var cat)) dsl.Category = cat;
+                    continue;
+                case "set_cover":
+                    if (TryGetStr(rawArgs, 0, isJs, out var cov)) dsl.Cover = cov;
+                    continue;
+                case "set_auto_entries":
+                    if (rawArgs.Count >= 1) dsl.AutoDiscoverEntries = rawArgs[0].Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
                     continue;
                 case "set_gamever":
                     if (TryGetStr(rawArgs, 0, isJs, out var gv)) dsl.GameVersion = gv;

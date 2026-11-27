@@ -60,6 +60,11 @@ web-*.zip
 YGO-Rogue-Windows-Setup*.exe
 backup/
 
+## Frontend (Vite + React)
+frontend/node_modules/
+frontend/dist/
+YGORogueDuelistCardModInstaller.Desktop/wwwroot/
+
 ## MOD Manager Local Runtime State & User Mods
 manager-state.json
 mods/

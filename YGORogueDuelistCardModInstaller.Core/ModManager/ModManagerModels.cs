@@ -46,6 +46,27 @@ public sealed class ModManifest
     [JsonPropertyName("description")]
     public string Description { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Standard category slug: cards | characters | relics | packs_decks | ui_theme | script_plugin | trainer | overhaul | other (or custom).
+    /// </summary>
+    [JsonPropertyName("category")]
+    public string? Category { get; set; }
+
+    /// <summary>
+    /// Optional relative cover image path inside the MOD directory (e.g. "cover.png", "cover.webp", "cover.svg", "art/190098001.webp").
+    /// When omitted, automatically discovers cover.* / icon.* or first art/* image.
+    /// </summary>
+    [JsonPropertyName("cover")]
+    public string? Cover { get; set; }
+
+    /// <summary>
+    /// When true (default), all js/**/*.js|mjs, styles/**/*.css, css/**/*.css, and lua/lib/**/*.lua files
+    /// are automatically discovered and imported in addition to any explicitly ordered entries.
+    /// Prefix any entry with "!" to exclude a specific file from auto-import.
+    /// </summary>
+    [JsonPropertyName("autoDiscoverEntries")]
+    public bool AutoDiscoverEntries { get; set; } = true;
+
     [JsonPropertyName("gameVersion")]
     public string? GameVersion { get; set; }
 
@@ -69,6 +90,13 @@ public sealed class ModManifest
 
     [JsonPropertyName("luaLibs")]
     public List<string>? LuaLibs { get; set; }
+
+    /// <summary>
+    /// Declarative in-game MOD Settings schema (rendered automatically in the F9 MOD Settings panel
+    /// and exposed to JS plugins via ctx.settings.get / onChange).
+    /// </summary>
+    [JsonPropertyName("settingsSchema")]
+    public JsonArray? SettingsSchema { get; set; }
 
     /// <summary>
     /// AOT-safe free-form JSON object exposed to JS plugins via ctx.config.
@@ -165,6 +193,16 @@ public sealed class ModManagerState
 
     [JsonPropertyName("repo")]
     public string Repo { get; set; } = InstallOptions.DefaultRepo;
+
+    /// <summary>
+    /// Optional GitHub mirror/proxy prefix (e.g. "https://ghfast.top/").
+    /// Empty string (default) uses official GitHub directly.
+    /// </summary>
+    [JsonPropertyName("githubProxy")]
+    public string GitHubProxy { get; set; } = string.Empty;
+
+    [JsonPropertyName("managerRepo")]
+    public string ManagerRepo { get; set; } = InstallOptions.DefaultManagerRepo;
 
     [JsonPropertyName("mods")]
     public List<ModEntryState> Mods { get; set; } = [];

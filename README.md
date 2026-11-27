@@ -2,7 +2,7 @@
 
 [中文文档 (Chinese)](README.zh-CN.md) | **English**
 
-A **Zero-Touch Multi-MOD Manager**, **Xmake-Style Lua/JS Modding SDK**, **Bilingual Desktop GUI (Avalonia)**, **CLI (CommandLineParser)**, and **AI MCP Server** for [**Yu-Gi-Oh! Rogue Duelist**](https://github.com/Thronior/ygo-rogue-duelist) — compiled to standalone **Native AOT** Windows x64 executables.
+A **Zero-Touch Multi-MOD Manager**, **Xmake-Style Lua/JS Modding SDK**, **Visual WebView2 MOD Studio (HeroUI v3 + React + CodeMirror 6 + Open REST/SSE API)**, **CLI (CommandLineParser)**, and **AI MCP Server** for [**Yu-Gi-Oh! Rogue Duelist**](https://github.com/Thronior/ygo-rogue-duelist) — compiled to standalone **Native AOT** Windows x64 executables.
 
 ---
 
@@ -28,10 +28,11 @@ This MOD Manager uses that exact built-in update mechanism to inject all enabled
 | **Xmake-Style Dual-Scope DSL** | Write MODs declaratively in **`mod.lua`** and/or **`mod.js`** with clean **Description Scope** (metadata, `set_min_gamever`, wildcard globs, `card`/`relic`/`character`/`pack`/`preconstructed`/`trainer` blocks) + **Script Scope** (inline Lua duel scripts/effects and auto-compiled JS runtime hooks `on_load`, `on_fetch`, `on_ui_change`, `on_hotkey`). |
 | **Full Game Content Authoring** | Create new **Cards** (`cards/*.json`), **Lua Card Scripts & Shared Libs** (`lua/cards/`, `lua/lib/`), **Playable Characters** (`characters/*.json`), **Relics** (`relics/*.json`), **Booster Packs** (`packs/*.json`), **Preconstructed Decks & YGOPro `.ydk`** (`preconstructed/*.json`, `decks/*.ydk`), **JS ES Module Plugins & CSS** (`js/`, `styles/`), and **Trainer / Modifier** (`trainer.json` + in-game `F8` overlay). |
 | **Developer Mode (`F10`)** | Toggle Developer Mode to inject an in-game **`F10` Dev Inspector**, expose `window.YgoModDev` console helpers, add a quick floating DEV bar, and unlock Sandbox Free Duel & character variants. |
-| **Visual MOD Studio & Multi-Workspace** | Immersive beginner-friendly workbench in the Avalonia GUI (visual Card/Character/Relic/Pack/Deck/Trainer builders + file tree + live Xmake DSL/Lua/JS editor) and a global Multi-Workspace Switcher to organize separate modpacks & dev projects. |
-| **Live Hot-Reload Dev Server** | Built-in loopback HTTP/SSE Hot-Reload server + `FileSystemWatcher` (`http://127.0.0.1:17845/`): live CSS hot-swap without reload, instant in-memory re-composition & auto-refresh in both the desktop game and browser preview. |
+| **Visual MOD Studio & Vanilla Gallery** | Gallery-first **HeroUI v3** (OKLCH Dark/Light themes) + React 19 + TypeScript + Tailwind CSS v4 UI hosted in a lightweight Native AOT WebView2 shell (`Photino.NET`). Features **true infinite scroll** (`IntersectionObserver`) for both your MOD assets and the offline Vanilla Reference Catalog (2,143 cards, 116 characters, 324 relics, 86 packs, 22 decks with 100% artwork & 1-click clone), **CodeMirror 6 IDE** with intelligent autocomplete for Xmake DSL (`mod.lua`/`mod.js`), ocgcore Lua (`Duel.*`/`Effect.*`), and `window.YgoModAPI` JS, plus Multi-Workspace switching. |
+| **Live Hot-Reload & Embedded Preview** | Built-in loopback HTTP/SSE Hot-Reload server + `FileSystemWatcher` (`http://127.0.0.1:17845/`): live CSS hot-swap, instant in-memory re-composition, an **embedded playable preview tab** right inside the MOD Studio, and desktop hot-reload bridge injection. |
+| **Open Local REST & SSE API** | Exposes `http://127.0.0.1:17850/api/*` (JSON REST + `/api/events` SSE + `/api/docs`) usable by both the embedded UI and external tools/scripts, plus headless `--api-only` mode. |
 | **Version Constraints & Packaging** | Enforce `minGameVersion`, `maxGameVersion`, and `minManagerVersion`; pack individual MODs (`.zip`) or entire **MOD Workspaces** (preserving load order, enabled flags, and computed `minGameVersion`) for 1-click sharing & import. |
-| **Three Native AOT Apps** | **Avalonia Desktop GUI** (EN / 中文 bilingual), **CommandLineParser CLI**, and **MCP Server** (stdio JSON-RPC 2.0 so AI assistants can guide you and directly build/validate/package MODs). |
+| **Three Native AOT Apps** | **WebView2 Desktop Studio** (Native AOT + Photino.NET + embedded React/CodeMirror 6, EN / 中文), **CommandLineParser CLI**, and **MCP Server** (stdio JSON-RPC 2.0 so AI assistants can guide you and directly build/validate/package MODs). |
 
 ---
 
@@ -39,10 +40,11 @@ This MOD Manager uses that exact built-in update mechanism to inject all enabled
 
 ```text
 YGORogueDuelistCardModInstaller.slnx
-├── YGORogueDuelistCardModInstaller.Core/      # AOT-safe core engine (DSL parser, compositor, packager, GDI+ WebP encoder, virtual bundle injector)
+├── YGORogueDuelistCardModInstaller.Core/      # AOT-safe core engine (DSL parser, compositor, packager, GDI+ WebP encoder, virtual bundle injector, offline vanilla catalog)
 ├── YGORogueDuelistCardModInstaller/           # Native AOT CLI (CommandLineParser)
-├── YGORogueDuelistCardModInstaller.Avalonia/  # Native AOT Desktop GUI (Avalonia 11, EN / 中文)
+├── YGORogueDuelistCardModInstaller.Desktop/   # Native AOT WebView2 Desktop Shell (Photino.NET + Loopback REST/SSE API + embedded React SPA)
 ├── YGORogueDuelistCardModInstaller.Mcp/       # Native AOT MCP Server (stdio JSON-RPC 2.0)
+├── frontend/                                  # Vite + React 19 + TypeScript + Tailwind CSS v4 + CodeMirror 6 IDE
 ├── examples/
 │   ├── sample-lua-js-mod/                     # Standard JSON + Lua + JS + CSS example MOD
 │   └── sample-xmake-dsl-mod/                  # Xmake-style mod.lua + mod.js + .ydk full-featured example MOD
@@ -54,15 +56,13 @@ YGORogueDuelistCardModInstaller.slnx
 
 ## Quick Start
 
-### 1. Desktop GUI (Avalonia — Bilingual EN / 中文)
+### 1. Desktop MOD Studio (Native AOT WebView2 — Bilingual EN / 中文)
 
-Launch `YGORogueDuelistCardModInstaller.Avalonia.exe`:
+Launch `YGORogueDuelistCardModInstaller.Desktop.exe`:
 - Click **`EN` / `中文`** in the top-right bar to switch UI language at any time.
-- Click **`+ Import ZIP / Pack`** to import a single MOD `.zip` **or** a full Workspace Modpack `.zip`.
-- Check/uncheck MODs and use **`↑` / `↓`** to adjust priority (lower items win on overlap).
-- Toggle **`Developer Mode (F10)`** if you are authoring or debugging MODs.
-- Click **`Pack Workspace`** to export your entire MOD workspace (with load order & `minGameVersion`) into a portable `.zip`.
-- Click **`Apply MODs`** or **`Apply & Launch`**.
+- Browse the **Vanilla Catalog** with infinite scroll and 1-click clone cards (with artwork + Lua script), characters, relics, booster packs, or decks straight into your MOD.
+- Author & edit in the **Visual MOD Studio** gallery with live artwork previews and **CodeMirror 6** autocomplete (`Ctrl+Space` for Xmake DSL / ocgcore Lua / `YgoModAPI`, `Ctrl+S` to save & hot-reload).
+- Test immediately in the **Live Hot-Reload Preview** tab or inject into the desktop game with **Apply MODs** / **Apply & Launch**.
 
 ### 2. Command-Line Interface (CLI)
 
@@ -182,15 +182,21 @@ See [examples/sample-xmake-dsl-mod](examples/sample-xmake-dsl-mod) and [docs/MOD
 
 ## Building & Publishing with Native AOT
 
-Requires **.NET 10 SDK** and **Visual Studio C++ x64 Build Tools** on Windows:
+Requires **.NET 10 SDK**, **Node.js 22+ (pnpm)**, and **Visual Studio C++ x64 Build Tools** on Windows:
 
 ```powershell
-# Build entire solution
+# 1. Build React + CodeMirror 6 frontend into Desktop/wwwroot/
+cd frontend
+pnpm install
+pnpm build
+cd ..
+
+# 2. Build entire solution
 dotnet build YGORogueDuelistCardModInstaller.slnx -c Release
 
-# Publish standalone Native AOT executables (win-x64)
+# 3. Publish standalone Native AOT executables (win-x64)
 dotnet publish YGORogueDuelistCardModInstaller -c Release -r win-x64 -o dist\aot\cli
-dotnet publish YGORogueDuelistCardModInstaller.Avalonia -c Release -r win-x64 -o dist\aot\gui
+dotnet publish YGORogueDuelistCardModInstaller.Desktop -c Release -r win-x64 -o dist\aot\gui
 dotnet publish YGORogueDuelistCardModInstaller.Mcp -c Release -r win-x64 -o dist\aot\mcp
 ```
 
