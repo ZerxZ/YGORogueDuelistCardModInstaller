@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.IO.Compression;
 using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -58,13 +60,15 @@ public sealed class ModHotReloadServer : IDisposable
 
     public int Port { get; private set; }
     public bool IsRunning => _listener is { IsListening: true };
+    public bool LanBound { get; private set; }
     public int Revision => _revision;
     public string BaseUrl => $"http://127.0.0.1:{Port}/";
+    public IReadOnlyList<string> LanUrls => IsRunning ? GetLocalLanUrls(Port) : [];
     public string? LastError => _lastError;
 
     public event Action<HotReloadEventInfo>? Reloaded;
 
-    public async Task StartAsync(int preferredPort = DefaultPort, CancellationToken ct = default)
+    public async Task StartAsync(int preferredPort = DefaultPort, CancellationToken ct = default, bool allowLan = true)
     {
         if (IsRunning) return;
 
@@ -73,12 +77,31 @@ public sealed class ModHotReloadServer : IDisposable
             ?? throw new ModOperationException("找不到原版游戏 web-X.Y.Z.zip，无法启动热加载服务器。请先在设置中指定游戏安装目录。");
         _vanillaZipPath = vanilla.ZipPath;
 
-        // Bind first available loopback port
+        // Try LAN-capable binding first (allows Android/Linux devices on same Wi-Fi to play live PWA!), fallback cleanly to loopback
         HttpListener? listener = null;
         var chosenPort = preferredPort;
+        var lanOk = false;
         for (var attempt = 0; attempt < 20; attempt++)
         {
             var candidatePort = preferredPort + attempt;
+            if (allowLan)
+            {
+                var lanCandidate = new HttpListener();
+                lanCandidate.Prefixes.Add($"http://+:{candidatePort}/");
+                try
+                {
+                    lanCandidate.Start();
+                    listener = lanCandidate;
+                    chosenPort = candidatePort;
+                    lanOk = true;
+                    break;
+                }
+                catch
+                {
+                    lanCandidate.Close();
+                }
+            }
+
             var candidate = new HttpListener();
             candidate.Prefixes.Add($"http://127.0.0.1:{candidatePort}/");
             try
@@ -86,6 +109,7 @@ public sealed class ModHotReloadServer : IDisposable
                 candidate.Start();
                 listener = candidate;
                 chosenPort = candidatePort;
+                lanOk = false;
                 break;
             }
             catch
@@ -100,6 +124,7 @@ public sealed class ModHotReloadServer : IDisposable
         }
 
         Port = chosenPort;
+        LanBound = lanOk;
         _listener = listener;
         _cts = new CancellationTokenSource();
 
@@ -120,7 +145,30 @@ public sealed class ModHotReloadServer : IDisposable
         _watcher.EnableRaisingEvents = true;
 
         _listenTask = Task.Run(() => AcceptLoopAsync(_cts.Token), _cts.Token);
-        _log?.Invoke(LogLevel.Ok, $"热加载服务器已启动：{BaseUrl}（监听 {_engine.Repository.ModsRoot}）");
+        var lanHint = lanOk && LanUrls.Count > 0 ? $" · 局域网/安卓 PWA：{LanUrls[0]}" : "";
+        _log?.Invoke(LogLevel.Ok, $"热加载服务器已启动：{BaseUrl}{lanHint}（监听 {_engine.Repository.ModsRoot}）");
+    }
+
+    private static List<string> GetLocalLanUrls(int port)
+    {
+        var urls = new List<string>();
+        try
+        {
+            foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (ni.OperationalStatus != OperationalStatus.Up) continue;
+                if (ni.NetworkInterfaceType is NetworkInterfaceType.Loopback or NetworkInterfaceType.Tunnel) continue;
+                foreach (var ua in ni.GetIPProperties().UnicastAddresses)
+                {
+                    if (ua.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+                    var ip = ua.Address.ToString();
+                    if (ip.StartsWith("169.254.", StringComparison.Ordinal)) continue;
+                    urls.Add($"http://{ip}:{port}/");
+                }
+            }
+        }
+        catch { }
+        return urls;
     }
 
     public void Stop()

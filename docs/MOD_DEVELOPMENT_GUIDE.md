@@ -1,6 +1,13 @@
 # Yu-Gi-Oh! Rogue Duelist MOD Development Guide (Mod Spec v1 + Xmake-Style DSL)
 
-This guide covers the complete **Mod Spec v1** format, **Xmake-style Dual-Scope `mod.lua` / `mod.js` DSL**, **Lua & JS runtime APIs**, **Cards / Characters / Relics / Booster Packs / Preconstructed Decks / `.ydk` / Trainer**, **Developer Mode (`F10`)**, **Minimum Version Constraints**, **Workspace Packaging**, and **MCP Server** workflows.
+> [!IMPORTANT]
+> **AI Authorship & Maintenance Notice**: This project and documentation were written end-to-end with **Gemini AI**. It is not maintained long-term and is provided as an open-source technical reference — forks and community improvements are warmly welcomed!
+
+This guide covers the complete **Mod Spec v1** format, **Xmake-style Dual-Scope `mod.lua` / `mod.js` DSL**, **All-Entries Auto-Import**, **In-Game `F9` MOD Settings**, **Campaign Rules & Vanilla Removals (`campaign-config.json`)**, **Post-Synchro Modern Era (`MR2–MR5`)**, **Cards / Characters / Relics / Booster Packs / Preconstructed Decks / `.ydk` / `.ypk` / Trainer**, **Developer Mode (`F10`)**, **MOD Identity Tagging (`-mod`)**, and **23-Tool MCP Server** workflows.
+
+See also:
+- **[Vanilla Relic System Deep Dive](RELIC-SYSTEM-DEEP-DIVE.md)** (12 modules, 46 fusion recipes, `passives.py` Lua/Hint protocol, Relic Seal & Shadow Relics)
+- **[Cross-Platform Packaging Plan (Windows / Linux / Android)](CROSS-PLATFORM-PACKAGING.md)**
 
 ---
 
@@ -8,23 +15,25 @@ This guide covers the complete **Mod Spec v1** format, **Xmake-style Dual-Scope 
 
 ```text
 mods/<mod-id>/
-├── mod-manifest.json          # Metadata, minGameVersion/maxGameVersion/minManagerVersion, entries & config
+├── mod-manifest.json          # Metadata, duelRules ("mr1".."mr5"), settingsSchema, autoDiscoverEntries (default true)
+├── settings.json              # Optional standalone in-game F9 MOD Settings schema
+├── campaign-config.json       # Optional declarative campaign rules, vanilla removals & curse/seal/fusion disables
+├── removals.json              # Optional alias for declarative vanilla removals
 ├── mod.lua                    # Optional Xmake-style Dual-Scope Lua DSL (can replace or complement JSON)
 ├── mod.js                     # Optional Xmake-style Dual-Scope JS DSL (auto-compiled into ES Module)
-├── cards/*.json               # Declarative custom cards (auto-synced to content.json / engine / era / zh)
+├── cards/*.json               # Declarative custom cards (auto-synced to content.json / engine / era / zh / assets/cards/)
 ├── characters/*.json          # New playable characters or patches to existing characters
 ├── relics/*.json              # Custom relics (shop, art, i18n, and Python/Lua duel effects)
-├── packs/*.json               # Custom booster packs (common/rare/super/ultra card pools)
-├── preconstructed/*.json      # Custom preconstructed / structure decks
+├── packs/*.json               # Custom booster packs (common/rare/super/ultra + art/packs/<id>.jpg)
+├── preconstructed/*.json      # Custom preconstructed / structure decks (+ art/decks/<art>.jpg)
 ├── decks/*.ydk                # Standard YGOPro .ydk decklists (auto-converted to preconstructed decks)
 ├── trainer.json               # Declarative trainer/modifier (unlock all, starting gold/LP, free shop, F8 overlay)
 ├── lua/
-│   ├── lib/*.lua              # Shared Lua helper libraries (appended to ocgcore-wasm utility.lua)
+│   ├── lib/*.lua              # Shared Lua helper libraries (auto-appended to ocgcore-wasm utility.lua)
 │   └── cards/c<id>.lua        # ocgcore-wasm Lua card scripts
-├── js/
-│   └── main.js                # ES Module JS plugin exporting init(ctx) using window.YgoModAPI
-├── styles/*.css               # Stylesheets auto-injected into index.html
-├── art/<id>.webp|png|jpg      # Card artwork & relic artwork
+├── js/**/*.js                 # Auto-imported ES Module JS plugins exporting init(ctx) using window.YgoModAPI
+├── styles/**/*.css            # Auto-imported stylesheets injected into index.html
+├── art/                       # Card art (<id>.jpg|png|webp), art/packs/, art/decks/, art/characters/, relic_*.png
 ├── campaign/<relPath>         # Direct overrides into campaign-files.json (Python/JSON/data)
 ├── overrides/<relPath>        # Arbitrary static web bundle overrides or new files (VirtualBundle mode)
 └── data/mod.json              # Legacy single-pack format (still 100% supported)
@@ -166,3 +175,41 @@ When enabled during `apply`:
 - **Import a Workspace Modpack**:
   - CLI: `ygo-mod.exe import .\dist\My-Collection-v1.0.0.zip` (or `import-workspace`)
   - GUI: Click **`+ Import ZIP / Pack`** — automatically detects `workspace-pack.json` and restores all MODs + load order!
+
+---
+
+## 10. Campaign Rules, Vanilla Removals & System Toggles (`campaign-config.json`)
+
+Place `campaign-config.json` (or `removals.json`) at your MOD root — or configure everything visually under **Visual MOD Studio -> Campaign & Rules**:
+
+```json
+{
+  "duelRules": "mr5",
+  "startingGold": 150,
+  "startingLp": 8000,
+  "bossEvery": 4,
+  "shopPackCount": 4,
+  "rerollBasePrice": 15,
+  "banishPrice": 20,
+  "disableBossCurses": false,
+  "disableShadowRelics": false,
+  "disableRelicSeal": true,
+  "disableRelicBanish": false,
+  "disableRelicFusions": false,
+  "removals": {
+    "removeCardIds": [55144522, 79571449],
+    "removeCharacterNames": ["Weevil Underwood"],
+    "removeCharacterIndices": [],
+    "removePackIds": ["EN-LOB"],
+    "removeDeckIds": ["SDK"],
+    "removeRelicKeys": ["cursed_greed", "feather"],
+    "removeCurseKeys": ["relic_seal", "tiny_hand"]
+  }
+}
+```
+
+## 11. Post-Synchro Modern Era (`MR2–MR5`) & MOD Identity Tagging (`-mod`)
+- **Modern Era Unlock**: Set `"duelRules": "mr2" | "mr3" | "mr4" | "mr5"` in `mod-manifest.json` or `campaign-config.json` (or simply add any Synchro `0x2000`, Xyz `0x800000`, Pendulum `0x1000000`, or Link `0x4000000` card). `ModCompositor` automatically enables the matching `OcgDuelMode`, Extra Deck filtering, EMZ slots, and 3-return `GetID()`.
+- **Automatic `-mod` Tag & Server Isolation**: Every composed virtual bundle automatically marks `replay-version.js` as `<ver>-mod`, renders `v<ver>-mod · MOD (N)` on the title screen, writes `modded: true` to `build.json`, and blocks uploads to official `*.hadow--un--esktop.workers.dev` stats/replays endpoints so vanilla and modded builds are never mixed.
+- **Standalone `web-*.zip` Mode**: Works completely without the original `.exe` installer — download `web-X.Y.Z.zip` (and subsequent ~5.5 MB `.delta.gz` patches) and play directly via Hot-Reload Preview or your browser!
+

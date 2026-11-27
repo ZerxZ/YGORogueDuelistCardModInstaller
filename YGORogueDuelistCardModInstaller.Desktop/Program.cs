@@ -50,7 +50,7 @@ internal static class Program
 
     private static void ApplyWindows11Chrome(IntPtr hwnd)
     {
-        if (hwnd == IntPtr.Zero) return;
+        if (!OperatingSystem.IsWindows() || hwnd == IntPtr.Zero) return;
         try
         {
             var dark = 1;
@@ -71,6 +71,7 @@ internal static class Program
 
     private static void BeginNativeDragOrResize(PhotinoWindow window, int hitTest)
     {
+        if (!OperatingSystem.IsWindows()) return;
         var hwnd = window.WindowHandle;
         if (hwnd == IntPtr.Zero) return;
         ReleaseCapture();
@@ -79,12 +80,15 @@ internal static class Program
 
     private static bool ToggleMaximize(PhotinoWindow window)
     {
-        var hwnd = window.WindowHandle;
-        if (hwnd != IntPtr.Zero)
+        if (OperatingSystem.IsWindows())
         {
-            var currentlyMax = IsZoomed(hwnd);
-            ShowWindow(hwnd, currentlyMax ? SW_RESTORE : SW_MAXIMIZE);
-            return !currentlyMax;
+            var hwnd = window.WindowHandle;
+            if (hwnd != IntPtr.Zero)
+            {
+                var currentlyMax = IsZoomed(hwnd);
+                ShowWindow(hwnd, currentlyMax ? SW_RESTORE : SW_MAXIMIZE);
+                return !currentlyMax;
+            }
         }
         var next = !window.Maximized;
         window.SetMaximized(next);
@@ -126,15 +130,22 @@ internal static class Program
                 var defaultPath = string.IsNullOrWhiteSpace(initialPath)
                     ? suggestedName
                     : Path.Combine(initialPath, suggestedName);
-                return window.ShowSaveFile(title, defaultPath, filters: [("ZIP Archive", ["*.zip"])]);
+                return window.ShowSaveFile(title, defaultPath, filters:
+                [
+                    ("YGO Rogue MOD Package (.yrdpk)", ["*.yrdpk"]),
+                    ("ZIP Archive (.zip)", ["*.zip"])
+                ]);
             });
 
         apiServer.Start(17850);
 
-        // Support headless API-only mode for automated testing (`--api-only`)
-        if (args.Any(a => string.Equals(a, "--api-only", StringComparison.OrdinalIgnoreCase)))
+        // Support headless API/WebUI-only mode for automated testing, Linux servers, or Android Termux (`--api-only` / `--serve`)
+        if (args.Any(a =>
+            string.Equals(a, "--api-only", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(a, "--serve", StringComparison.OrdinalIgnoreCase)))
         {
             Console.WriteLine($"API_URL={apiServer.BaseUrl}");
+            Console.WriteLine($"Web Studio UI: {apiServer.BaseUrl}");
             Console.Out.Flush();
             using var ev = new ManualResetEventSlim(false);
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; ev.Set(); };
@@ -150,19 +161,18 @@ internal static class Program
 
         window = new PhotinoWindow()
             .SetTitle("Yu-Gi-Oh! Rogue Duelist MOD Studio")
-            .SetChromeless(true)
+            .SetChromeless(OperatingSystem.IsWindows())
             .SetUseOsDefaultSize(false)
             .SetUseOsDefaultLocation(false)
-            .SetSize(1400, 900)
-            .SetLocation(new System.Drawing.Point(120, 60))
-            .SetMinSize(960, 640)
+            .SetSize(1560, 940)
+            .SetMinSize(1080, 680)
             .Center()
             .SetResizable(true)
             .SetContextMenuEnabled(true)
             .SetDevToolsEnabled(true)
             .RegisterWindowCreatedHandler((sender, _) =>
             {
-                if (sender is PhotinoWindow w)
+                if (OperatingSystem.IsWindows() && sender is PhotinoWindow w)
                 {
                     ApplyWindows11Chrome(w.WindowHandle);
                 }
@@ -176,7 +186,7 @@ internal static class Program
                         BeginNativeDragOrResize(w, HTCAPTION);
                         break;
                     case "win:minimize":
-                        if (w.WindowHandle != IntPtr.Zero) ShowWindow(w.WindowHandle, SW_MINIMIZE);
+                        if (OperatingSystem.IsWindows() && w.WindowHandle != IntPtr.Zero) ShowWindow(w.WindowHandle, SW_MINIMIZE);
                         else w.SetMinimized(true);
                         break;
                     case "win:maximize":

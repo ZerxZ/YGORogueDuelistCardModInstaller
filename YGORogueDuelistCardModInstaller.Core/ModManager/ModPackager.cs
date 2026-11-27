@@ -11,6 +11,11 @@ namespace YGORogueDuelistCardModInstaller.Core.ModManager;
 public static class ModPackager
 {
     public const string WorkspacePackFileName = "workspace-pack.json";
+    public const string ModPackageExtension = ".yrdpk";
+
+    public static bool IsModArchiveExtension(string path) =>
+        path.EndsWith(".yrdpk", StringComparison.OrdinalIgnoreCase) ||
+        path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
 
     public static string PackSingleMod(ModRepository repository, string modId, string? outputZipPath = null)
     {
@@ -19,7 +24,7 @@ public static class ModPackager
             ?? throw new ModOperationException($"找不到 MOD：{modId}");
 
         var dest = string.IsNullOrWhiteSpace(outputZipPath)
-            ? Path.Combine(repository.WorkspaceRoot, "dist", $"{mod.Id}-v{mod.Manifest.Version}.zip")
+            ? Path.Combine(repository.WorkspaceRoot, "dist", $"{mod.Id}-v{mod.Manifest.Version}{ModPackageExtension}")
             : Path.GetFullPath(outputZipPath);
 
         Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
@@ -75,7 +80,7 @@ public static class ModPackager
         var name = string.IsNullOrWhiteSpace(packName) ? "YGO-Rogue-Modpack" : packName.Trim();
         var safeSlug = ModRepository.SanitizeId(name);
         var dest = string.IsNullOrWhiteSpace(outputZipPath)
-            ? Path.Combine(repository.WorkspaceRoot, "dist", $"{safeSlug}-v{ver}.zip")
+            ? Path.Combine(repository.WorkspaceRoot, "dist", $"{safeSlug}-v{ver}{ModPackageExtension}")
             : Path.GetFullPath(outputZipPath);
 
         Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
@@ -135,7 +140,7 @@ public static class ModPackager
 
     public static bool IsWorkspacePackZip(string zipPath)
     {
-        if (!File.Exists(zipPath) || !zipPath.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+        if (!File.Exists(zipPath) || !IsModArchiveExtension(zipPath))
         {
             return false;
         }

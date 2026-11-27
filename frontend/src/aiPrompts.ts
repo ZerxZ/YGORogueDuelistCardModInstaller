@@ -3,6 +3,7 @@ import type { ApiEndpointDoc, Lang, McpFocusContext, McpToolDef } from './types'
 export type AiPromptPresetKey =
   | 'all_in_one'
   | 'cards_lua'
+  | 'modern_era'
   | 'settings_js'
   | 'content_ypk'
   | 'rest_api'
@@ -45,6 +46,13 @@ export const AI_PROMPT_PRESETS: AiPromptPresetMeta[] = [
     labelEn: 'Cards & ocgcore Lua',
     descZh: '引导 AI 先查阅原版卡脚本与位掩码指南，再精准写卡、写 Lua 并热加载验证',
     descEn: 'Guides AI to inspect vanilla card scripts & bitmasks before writing cards & Lua scripts',
+  },
+  {
+    key: 'modern_era',
+    labelZh: '同调 / 超量 / 灵摆 / 连接现代扩展',
+    labelEn: 'Modern Era (Synchro/Xyz/Pendulum/Link)',
+    descZh: '基于 runtime/script (proc_synchro/xyz/pendulum/link) 与 MR2–MR5 引擎补丁开发现代召唤时代 MOD',
+    descEn: 'Author Synchro/Xyz/Pendulum/Link era MODs using bundled proc_*.lua & auto MR2–MR5 engine patch',
   },
   {
     key: 'settings_js',
@@ -177,6 +185,36 @@ ${epList}
 3. Call \`get_vanilla_card_script(query="...")\` to study authentic vanilla ocgcore-wasm 0.1.2 patterns (\`local s, id, o = GetID()\`).
 4. Use \`add_mod_card\`, \`patch_mod_file\`, or \`write_mod_file\` (shared helpers in \`lua/lib/*.lua\` are auto-imported).
 5. Run \`validate_mod(modId="${modId}")\` and \`trigger_hot_reload\` to verify live.${customBlock}`;
+  }
+
+  if (preset === 'modern_era') {
+    return isZh
+      ? `请使用已连接的 **ygo-rogue-mod** 内置 MCP 服务器（\`${mcpUrl}\`）为 MOD \`${modId}\` 开发 **同调 (5D's) / 超量 (ZEXAL) / 灵摆 (ARC-V) / 连接 (VRAINS)** 现代召唤时代扩展。
+
+## 引擎实测事实（基于 ygo-rogue-duelist/runtime/script）
+- 游戏底层是 **EDOPro ocgcore-wasm 0.1.2**，且 \`scripts.json\` 已完整内置 \`proc_synchro.lua\`、\`proc_xyz.lua\`、\`proc_pendulum.lua\`、\`proc_link.lua\`、\`utility.lua\`、\`constant.lua\`！
+- \`OcgDuelMode\` 已原生支持 \`MODE_MR2\`（同调/超量）、\`MODE_MR3\`（灵摆）、\`MODE_MR4\`（连接/EMZ）、\`MODE_MR5\`（大师规则 2020）。
+- **本 MOD 管理器自动解锁机制**：在 \`mod-manifest.json\` 设置 \`"duelRules": "mr2" | "mr5"\`（或只要 MOD 中出现同调 \`0x2021\` / 超量 \`0x800021\` / 灵摆 \`0x1000021\` / 连接 \`0x4000021\` 卡牌），合成器会自动修补 \`campaign.py\` + \`mobile.js\` + \`engine.js\`，自动启用额外卡组识别、EMZ 区域与对应大师规则，并自动升级 \`GetID()\` 三返回值！
+- 注意避坑：\`ocgcore-wasm 0.1.2\` 不支持 \`CHAININFO_TRIGGERING_LINK (31)\` 与 \`CHAININFO_TRIGGERING_LSCALE (32)\`，写脚本时避免调用这两个链查询。
+
+## 请按以下 MCP 流程执行
+1. 先调用 \`get_mod_guide(topic="modern_era")\` 和 \`get_mod_guide(topic="bitmasks")\` 核对 \`data.type\`、\`lscale/rscale\`、\`link_marker\` 及 \`Synchro/Xyz/Pendulum/Link.AddProcedure\` 写法。
+2. 如需参考官方 EDOPro 脚本写法，可调用 \`get_vanilla_card_script\` 或查阅工作区技能 \`.agents/skills/ygo-rogue-modding/SKILL.md\`。
+3. 使用 \`add_mod_card\` / \`write_mod_file\` 添加调整怪兽与同调/超量/灵摆/连接怪兽及对应卡包、卡组。
+4. 调用 \`validate_mod(modId="${modId}")\` 与 \`trigger_hot_reload\` 立即在游戏内验证召唤与效果！${customBlock}`
+      : `Use the connected **ygo-rogue-mod** MCP server (\`${mcpUrl}\`) to build a **Synchro / Xyz / Pendulum / Link** modern-era expansion for MOD \`${modId}\`.
+
+## Verified Engine Facts (from ygo-rogue-duelist/runtime/script)
+- Powered by EDOPro **ocgcore-wasm 0.1.2** with \`proc_synchro.lua\`, \`proc_xyz.lua\`, \`proc_pendulum.lua\`, \`proc_link.lua\`, \`utility.lua\`, and \`constant.lua\` already bundled in \`scripts.json\`.
+- \`OcgDuelMode\` natively supports \`MODE_MR2\` through \`MODE_MR5\`.
+- Setting \`"duelRules": "mr2" | "mr5"\` in \`mod-manifest.json\` (or adding any Synchro/Xyz/Pendulum/Link card) automatically patches \`campaign.py\`, \`mobile.js\`, and \`engine.js\` for full Extra Deck recognition, EMZ slots, Master Rule flags, and 3-return \`GetID()\`.
+- Caveat: Avoid \`CHAININFO_TRIGGERING_LINK (31)\` and \`CHAININFO_TRIGGERING_LSCALE (32)\` (predated by wasm 0.1.2).
+
+## MCP Workflow
+1. Call \`get_mod_guide(topic="modern_era")\` and \`get_mod_guide(topic="bitmasks")\`.
+2. Also reference \`.agents/skills/ygo-rogue-modding/SKILL.md\` for full \`runtime/script\` conventions.
+3. Author cards/scripts/packs via \`add_mod_card\` / \`write_mod_file\`.
+4. Call \`validate_mod(modId="${modId}")\` and \`trigger_hot_reload\`.${customBlock}`;
   }
 
   if (preset === 'settings_js') {

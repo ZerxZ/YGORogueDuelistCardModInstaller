@@ -112,6 +112,9 @@ public static class ModCompositor
         var ensureGetId3Return = false;
         var enableBuiltInTrainerOverlay = false;
         JsonObject? trainerOverlayConfig = null;
+        string? requestedDuelRules = null;
+        var hasModernExtraDeckCards = false;
+        var hasPendulumOrLinkCards = false;
 
         var inlineArtCodes = new List<string>();
         var inlineArtCodeSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -143,6 +146,11 @@ public static class ModCompositor
 
             try
             {
+                if (!string.IsNullOrWhiteSpace(mod.Manifest.DuelRules))
+                {
+                    requestedDuelRules = mod.Manifest.DuelRules.Trim().ToLowerInvariant();
+                }
+
                 var dsl = ModDslParser.TryParseModDirectory(mod.DirectoryPath);
                 if (dsl is not null)
                 {
@@ -258,8 +266,8 @@ public static class ModCompositor
                     dsl?.InlinePacks);
                 if (packObjects.Count > 0)
                 {
-                    var packCount = ApplyDeclarativePacks(packObjects, GetContent(), GetCampaign(), GetZh());
-                    interaction.Say($"packs: 自动注册/更新补充卡包 {packCount} 个（同步 content / campaign / zh）");
+                    var packCount = ApplyDeclarativePacks(packObjects, GetContent(), GetCampaign(), GetZh(), mod.DirectoryPath, files, existingZipEntries, newlyAdded);
+                    interaction.Say($"packs: 自动注册/更新补充卡包 {packCount} 个（同步 content / campaign / zh / 封面图）");
                 }
 
                 // 2c. Declarative preconstructed/*.json + DSL preconstructed()/deck() blocks & decks/*.ydk
@@ -269,8 +277,8 @@ public static class ModCompositor
                     dsl?.InlinePreconstructedDecks);
                 if (preconObjects.Count > 0)
                 {
-                    var preconCount = ApplyDeclarativePreconstructed(preconObjects, GetContent(), GetCampaign(), GetZh());
-                    interaction.Say($"preconstructed: 自动注册/更新预组卡组 {preconCount} 套");
+                    var preconCount = ApplyDeclarativePreconstructed(preconObjects, GetContent(), GetCampaign(), GetZh(), mod.DirectoryPath, files, existingZipEntries, newlyAdded);
+                    interaction.Say($"preconstructed: 自动注册/更新预组卡组 {preconCount} 套（含封面图）");
                 }
 
                 var ydkFiles = ModRepository.EnumerateYdkFiles(mod.DirectoryPath)
@@ -353,6 +361,25 @@ public static class ModCompositor
                         ref unlockAllVariantsJs,
                         ref enableBuiltInTrainerOverlay,
                         ref trainerOverlayConfig,
+                        interaction);
+                }
+
+                // 5b. Declarative campaign-config.json / removals.json (remove vanilla cards/chars/packs/decks/relics/curses, disable curses/shadow/sealing/banish/fusions, tune campaign rules)
+                foreach (var cfgFile in new[] { "campaign-config.json", "removals.json" })
+                {
+                    var cfgPath = Path.Combine(mod.DirectoryPath, cfgFile);
+                    if (!File.Exists(cfgPath)) continue;
+                    var cfgObj = ModPatcher.ParseJson(File.ReadAllText(cfgPath, Encoding.UTF8)).AsObject();
+                    var cfgDuelRules = cfgObj["duelRules"]?.GetValue<string>();
+                    if (!string.IsNullOrWhiteSpace(cfgDuelRules))
+                    {
+                        requestedDuelRules = cfgDuelRules.Trim().ToLowerInvariant();
+                    }
+                    ApplyCampaignAndRemovalsConfig(
+                        mod.Id + "_" + Path.GetFileNameWithoutExtension(cfgFile),
+                        cfgObj,
+                        GetContent(),
+                        GetCampaign(),
                         interaction);
                 }
 
@@ -671,6 +698,71 @@ public static class ModCompositor
             }
         }
 
+        // Detect Synchro (0x2000), Xyz (0x800000), Pendulum (0x1000000), or Link (0x4000000) cards in engine-data.json
+        if (engine is not null)
+        {
+            foreach (var (_, val) in engine)
+            {
+                if (val is not JsonObject cObj || cObj["type"] is not JsonValue tv || !tv.TryGetValue<int>(out var typeMask)) continue;
+                if ((typeMask & (0x2000 | 0x800000 | 0x4000000)) != 0) hasModernExtraDeckCards = true;
+                if ((typeMask & (0x1000000 | 0x4000000)) != 0) hasPendulumOrLinkCards = true;
+            }
+        }
+
+        var effectiveRules = requestedDuelRules
+            ?? (hasPendulumOrLinkCards ? "mr5" : hasModernExtraDeckCards ? "mr2" : null);
+
+        if (hasModernExtraDeckCards || !string.IsNullOrWhiteSpace(effectiveRules))
+        {
+            const string fullExtraMask = "(64|0x2000|0x800000|0x4000000)";
+            // 1. Patch campaign.py is_extra_deck check so Synchro/Xyz/Link go into Extra Deck
+            var campObj = GetCampaign();
+            if (campObj["campaign.py"] is JsonValue cv && cv.TryGetValue<string>(out var campPy))
+            {
+                var patchedCampPy = campPy.Replace("['type'] & 64", "['type'] & (64 | 0x2000 | 0x800000 | 0x4000000)", StringComparison.Ordinal);
+                if (!ReferenceEquals(patchedCampPy, campPy)) campObj["campaign.py"] = patchedCampPy;
+            }
+
+            // 2. Patch JS Extra Deck checks (mobile.js, draft-ui.js, tag-ui.js, run-card.js)
+            foreach (var jsName in new[] { "mobile.js", "draft-ui.js", "tag-ui.js", "run-card.js" })
+            {
+                if (!existingZipEntries.Contains(jsName)) continue;
+                var jsText = ModPatcher.ReadZipText(zip, jsName);
+                var patchedJs = jsText
+                    .Replace(".data.type&64", $".data.type&{fullExtraMask}", StringComparison.Ordinal)
+                    .Replace(".data.type&0x40", $".data.type&{fullExtraMask}", StringComparison.Ordinal);
+                if (!string.Equals(patchedJs, jsText, StringComparison.Ordinal))
+                {
+                    files[jsName] = ModPatcher.GetUtf8Bytes(patchedJs);
+                }
+            }
+
+            // 3. Patch engine.js Master Rule + EMZ/Xyz/Pendulum queries when modern duelRules is active
+            if (!string.IsNullOrWhiteSpace(effectiveRules) && existingZipEntries.Contains("engine.js"))
+            {
+                var modeExpr = effectiveRules switch
+                {
+                    "mr5" or "2020" => "(D.MODE_MR5??D.MODE_MR2)",
+                    "mr4" => "(D.MODE_MR4??D.MODE_MR2)",
+                    "mr3" => "(D.MODE_MR3??D.MODE_MR2)",
+                    "mr2" => "(D.MODE_MR2??D.MODE_MR1)",
+                    _ => "(D.MODE_MR1??D.MODE_GOAT)"
+                };
+
+                var engJs = ModPatcher.ReadZipText(zip, "engine.js");
+                var patchedEng = engJs
+                    .Replace("flags:rules===2?D.MODE_MR2:(D.MODE_MR1??D.MODE_GOAT)", $"flags:rules===2?D.MODE_MR2:{modeExpr}", StringComparison.Ordinal)
+                    .Replace("[[L.MZONE,0,5],[L.SZONE,8,8]]", "[[L.MZONE,0,7],[L.SZONE,8,8]]", StringComparison.Ordinal)
+                    .Replace("monsters:this.query(p,L.MZONE).slice(0,5)", "monsters:this.query(p,L.MZONE).slice(0,7)", StringComparison.Ordinal);
+                if (!string.Equals(patchedEng, engJs, StringComparison.Ordinal))
+                {
+                    files["engine.js"] = ModPatcher.GetUtf8Bytes(patchedEng);
+                }
+            }
+
+            interaction.Say($"Modern Era Patch: 已自动启用现代额外卡组识别 (融合/同调/超量/连接) 与大师规则 {(effectiveRules ?? "mr2").ToUpperInvariant()}！");
+        }
+
         interaction.ReportProgress("正在序列化合成数据...", 72);
 
         if (content is not null) files["content.json"] = ModPatcher.GetUtf8Bytes(ModPatcher.ToJsonText(content));
@@ -681,7 +773,67 @@ public static class ModCompositor
 
         if (cardAssetsTouched)
         {
-            interaction.ReportProgress("正在内联全部 MOD 卡图到 card-assets.js...", 78);
+            interaction.ReportProgress("正在同步全部 MOD 卡图到 assets/cards/*.jpg 与 card-assets.js...", 78);
+
+            // CRITICAL FIX: Game screens (cpu-deck-editor.js, cpu-viewer.js, mobile.js, card-assets.js preloadCards)
+            // directly fetch or render <img src="assets/cards/${id}.jpg">!
+            // Always emit assets/cards/{code}.jpg into the bundle (using local art, picsDir, or vanilla card-back.jpg fallback)
+            // so custom & YPK cards NEVER show broken images or fail startup with "N card images could not load"!
+            byte[]? fallbackCardBack = null;
+            if (existingZipEntries.Contains("assets/card-back.jpg"))
+            {
+                try
+                {
+                    var cbEntry = zip.GetEntry("assets/card-back.jpg");
+                    if (cbEntry is not null)
+                    {
+                        using var s = cbEntry.Open();
+                        using var ms = new MemoryStream();
+                        s.CopyTo(ms);
+                        fallbackCardBack = ms.ToArray();
+                    }
+                }
+                catch { }
+            }
+
+            var emittedCardArt = 0;
+            var fallbackCardArt = 0;
+            foreach (var code in inlineArtCodes)
+            {
+                var relPath = $"assets/cards/{code}.jpg";
+                string? artFile = null;
+                if (inlineArtFileByCode.TryGetValue(code, out var bundled) && File.Exists(bundled))
+                {
+                    artFile = bundled;
+                }
+                else if (!string.IsNullOrWhiteSpace(picsDir))
+                {
+                    foreach (var ext in new[] { "jpg", "jpeg", "png", "webp" })
+                    {
+                        var cand = Path.Combine(picsDir, $"{code}.{ext}");
+                        if (File.Exists(cand)) { artFile = cand; break; }
+                    }
+                }
+
+                if (artFile is not null)
+                {
+                    files[relPath] = File.ReadAllBytes(artFile);
+                    if (!existingZipEntries.Contains(relPath)) newlyAdded.Add(relPath);
+                    emittedCardArt++;
+                }
+                else if (!existingZipEntries.Contains(relPath) && !files.ContainsKey(relPath) && fallbackCardBack is not null)
+                {
+                    files[relPath] = fallbackCardBack;
+                    newlyAdded.Add(relPath);
+                    fallbackCardArt++;
+                }
+            }
+
+            if (emittedCardArt > 0 || fallbackCardArt > 0)
+            {
+                interaction.Say($"assets/cards/*.jpg: 写入自定义卡图 {emittedCardArt} 张" + (fallbackCardArt > 0 ? $"（缺失卡图自动兜底卡背 {fallbackCardArt} 张，防加载失败）" : ""));
+            }
+
             var rawCardAssets = ModPatcher.ReadZipText(zip, "card-assets.js");
             files["card-assets.js"] = ModPatcher.GetUtf8Bytes(
                 BuildMergedCardAssets(rawCardAssets, inlineArtCodes, inlineArtFileByCode, picsDir, interaction));
@@ -708,6 +860,112 @@ public static class ModCompositor
         {
             files["ui-art.js"] = ModPatcher.GetUtf8Bytes(
                 ModPatcher.PatchUiArt(ModPatcher.ReadZipText(zip, "ui-art.js")));
+        }
+
+        // ==================== MODDED BUILD IDENTITY TAG & OFFICIAL WORKER ISOLATION ====================
+        // Respecting upstream author Thronior's request:
+        // 1. Tag replay-version.js with "-mod" (e.g. "0.2.47-mod") so main menu, error reports, run cards,
+        //    and Tag/Draft room handshakes clearly identify MOD builds and never match vanilla rooms.
+        // 2. Prevent modded builds from uploading telemetry/stats/replays to Thronior's official Cloudflare Workers
+        //    (*.hadow--un--esktop.workers.dev) while preserving self-hosted custom Worker URLs if configured!
+        if (enabledMods.Count > 0 || developerMode)
+        {
+            var rawBaseVer = !string.IsNullOrWhiteSpace(baseGameVersion) ? baseGameVersion.Trim() : "0.0.0";
+            var moddedVersionTag = rawBaseVer.Contains("-mod", StringComparison.OrdinalIgnoreCase)
+                ? rawBaseVer
+                : $"{rawBaseVer}-mod";
+
+            if (existingZipEntries.Contains("replay-version.js") && !looseOverrides.ContainsKey("replay-version.js"))
+            {
+                var rvText = ModPatcher.ReadZipText(zip, "replay-version.js");
+                var patchedRv = Regex.Replace(
+                    rvText,
+                    @"export\s+const\s+replayVersion\s*=\s*""[^""]*""\s*;",
+                    $"export const replayVersion=\"{moddedVersionTag}\";",
+                    RegexOptions.CultureInvariant);
+                if (string.Equals(patchedRv, rvText, StringComparison.Ordinal))
+                {
+                    patchedRv = $"export const replayVersion=\"{moddedVersionTag}\";\n";
+                }
+                files["replay-version.js"] = ModPatcher.GetUtf8Bytes(patchedRv);
+            }
+
+            // Keep local patch-notes lookup working with "-mod" suffix stripped
+            if (existingZipEntries.Contains("patch-notes.js") && !looseOverrides.ContainsKey("patch-notes.js"))
+            {
+                var pnText = ModPatcher.ReadZipText(zip, "patch-notes.js");
+                var patchedPn = pnText.Replace(
+                    "versions.find(v=>v.version===replayVersion)",
+                    "versions.find(v=>v.version===String(replayVersion).replace(/-mod.*$/,''))",
+                    StringComparison.Ordinal);
+                if (!string.Equals(patchedPn, pnText, StringComparison.Ordinal))
+                {
+                    files["patch-notes.js"] = ModPatcher.GetUtf8Bytes(patchedPn);
+                }
+            }
+
+            // Annotate build.json with modded metadata
+            if (existingZipEntries.Contains("build.json") && !looseOverrides.ContainsKey("build.json"))
+            {
+                try
+                {
+                    var buildObj = ModPatcher.ParseJson(ModPatcher.ReadZipText(zip, "build.json")).AsObject();
+                    buildObj["modded"] = true;
+                    buildObj["modVersion"] = moddedVersionTag;
+                    buildObj["modCount"] = enabledMods.Count;
+                    buildObj["modIds"] = new JsonArray(enabledMods.Select(m => (JsonNode?)JsonValue.Create(m.Id)).ToArray());
+                    files["build.json"] = ModPatcher.GetUtf8Bytes(ModPatcher.ToJsonText(buildObj));
+                }
+                catch { }
+            }
+
+            // Isolate official global-stats worker (only when user hasn't overridden multiplayer-config.json)
+            var hasCustomMultiplayerConfig = looseOverrides.ContainsKey("multiplayer-config.json");
+            if (!hasCustomMultiplayerConfig && existingZipEntries.Contains("global-stats.js") && !looseOverrides.ContainsKey("global-stats.js"))
+            {
+                var gsText = ModPatcher.ReadZipText(zip, "global-stats.js");
+                var patchedGs = gsText.Replace(
+                    "async function syncBatch(){",
+                    "async function syncBatch(){if(/hadow--un--esktop\\.workers\\.dev/i.test(String(endpoint||'')))return;/* mod-isolated */",
+                    StringComparison.Ordinal);
+                if (!string.Equals(patchedGs, gsText, StringComparison.Ordinal))
+                {
+                    files["global-stats.js"] = ModPatcher.GetUtf8Bytes(patchedGs);
+                }
+            }
+
+            // Isolate official replay / behaviour-flag worker so modded flags never enter Thronior's vanilla review queue
+            if (!hasCustomMultiplayerConfig && existingZipEntries.Contains("replays.js") && !looseOverrides.ContainsKey("replays.js"))
+            {
+                var rpText = ModPatcher.ReadZipText(zip, "replays.js");
+                var patchedRp = rpText.Replace(
+                    "export async function sendReplayBatch(rows,request=fetch){",
+                    "export async function sendReplayBatch(rows,request=fetch){if(/hadow--un--esktop\\.workers\\.dev/i.test(String(REPLAY_ENDPOINT||'')))throw Error('Modded build (v" + moddedVersionTag + "): uploads to the official vanilla server are disabled.');",
+                    StringComparison.Ordinal);
+                if (!string.Equals(patchedRp, rpText, StringComparison.Ordinal))
+                {
+                    files["replays.js"] = ModPatcher.GetUtf8Bytes(patchedRp);
+                }
+            }
+
+            // Show clear visible "[MOD]" marker next to title version so screenshots & players distinguish MOD vs Vanilla instantly
+            if (existingZipEntries.Contains("mobile.js") && !looseOverrides.ContainsKey("mobile.js"))
+            {
+                var mobText = files.TryGetValue("mobile.js", out var existingMob)
+                    ? Encoding.UTF8.GetString(existingMob)
+                    : ModPatcher.ReadZipText(zip, "mobile.js");
+                var modBadgeHtml = $"<small class=\"title-version\">v${{esc(replayVersion)}} · MOD ({enabledMods.Count})</small>";
+                var patchedMob = mobText.Replace(
+                    "<small class=\"title-version\">v${esc(replayVersion)}</small>",
+                    modBadgeHtml,
+                    StringComparison.Ordinal);
+                if (!string.Equals(patchedMob, mobText, StringComparison.Ordinal))
+                {
+                    files["mobile.js"] = ModPatcher.GetUtf8Bytes(patchedMob);
+                }
+            }
+
+            interaction.Say($"MOD 识别标记: 已标记版本为 v{moddedVersionTag}，并自动隔离官方统计/回放/联机房间服务器（防止与原版混淆）");
         }
 
         if (runtimeDescriptors.Count > 0 || hotReloadPort is > 0)
@@ -780,7 +1038,11 @@ public static class ModCompositor
         IReadOnlyList<JsonObject> packDefs,
         JsonObject content,
         JsonObject campaign,
-        JsonObject zh)
+        JsonObject zh,
+        string modDir,
+        Dictionary<string, byte[]> files,
+        HashSet<string> existingZipEntries,
+        HashSet<string> newlyAdded)
     {
         var contentPacks = content["packs"]!.AsArray();
         var campPacks = ModPatcher.ParseJson(campaign["data/packs.json"]!.GetValue<string>()).AsArray();
@@ -792,15 +1054,71 @@ public static class ModCompositor
             var id = raw["id"]?.GetValue<string>() ?? throw new ModOperationException("卡包定义缺少 id");
             var name = raw["name"]?.GetValue<string>() ?? id;
             var zhName = raw["zhName"]?.GetValue<string>();
+            var customCover = raw["cover"]?.GetValue<string>() ?? raw["art"]?.GetValue<string>() ?? raw["image"]?.GetValue<string>();
 
             var clean = raw.DeepClone().AsObject();
             clean.Remove("zhName");
+            clean.Remove("cover");
+            clean.Remove("art");
             clean["region"] ??= "EN";
             clean["code"] ??= id.Contains('-') ? id.Split('-').Last() : id;
             clean["date"] ??= string.Empty;
             clean["image"] ??= string.Empty;
             clean["size"] ??= 9;
             clean["common"] ??= new JsonArray();
+
+            // Inject custom pack cover into assets/packs/{id}.jpg (where mobile.js / pack-opening.js / tag-ui.js load pack art!)
+            // If no explicit pack cover exists, scan cards in the pack for the first available local art so it never renders broken!
+            var coverFile = ResolveLocalEntityArt(modDir, customCover, "packs", id);
+            if (coverFile is null)
+            {
+                foreach (var tier in new[] { "ultra", "super", "rare", "common" })
+                {
+                    if (clean[tier] is not JsonArray arr) continue;
+                    foreach (var item in arr)
+                    {
+                        if (item is not JsonValue cardV) continue;
+                        coverFile = ResolveLocalEntityArt(modDir, null, "cards", cardV.ToString());
+                        if (coverFile is not null) break;
+                    }
+                    if (coverFile is not null) break;
+                }
+            }
+            if (coverFile is not null)
+            {
+                var relPackArt = $"assets/packs/{id}.jpg";
+                files[relPackArt] = File.ReadAllBytes(coverFile);
+                if (!existingZipEntries.Contains(relPackArt)) newlyAdded.Add(relPackArt);
+            }
+
+            // campaign_expansion.py open_pack() enforces >= 9 distinct cards per booster pack.
+            // Automatically pad small custom/YPK packs with safe vanilla staples so opening the pack never crashes!
+            var uniqueIds = new HashSet<int>();
+            foreach (var tier in new[] { "common", "rare", "super", "ultra" })
+            {
+                if (clean[tier] is JsonArray tierArr)
+                {
+                    foreach (var n in tierArr)
+                    {
+                        if (n is JsonValue nv && nv.TryGetValue<int>(out var cid) && cid > 0) uniqueIds.Add(cid);
+                    }
+                }
+            }
+            if (uniqueIds.Count < 9)
+            {
+                var commonArr = clean["common"] as JsonArray ?? new JsonArray();
+                clean["common"] = commonArr;
+                int[] fallbackStaples =
+                [
+                    46986414, 38033121, 89631139, 74677422, 55144522,
+                    5318639, 83764718, 44095762, 12580477, 40640057, 70781052, 93717133
+                ];
+                foreach (var sid in fallbackStaples)
+                {
+                    if (uniqueIds.Count >= 9) break;
+                    if (uniqueIds.Add(sid)) commonArr.Add((JsonNode?)JsonValue.Create(sid));
+                }
+            }
 
             UpsertByStringProperty(contentPacks, "id", id, clean);
             UpsertByStringProperty(campPacks, "id", id, clean);
@@ -816,7 +1134,11 @@ public static class ModCompositor
         IReadOnlyList<JsonObject> deckDefs,
         JsonObject content,
         JsonObject campaign,
-        JsonObject zh)
+        JsonObject zh,
+        string modDir,
+        Dictionary<string, byte[]> files,
+        HashSet<string> existingZipEntries,
+        HashSet<string> newlyAdded)
     {
         var contentPrecon = content["preconstructedDecks"]!.AsArray();
         var campPreconRoot = ModPatcher.ParseJson(campaign["data/preconstructed.json"]!.GetValue<string>());
@@ -839,12 +1161,30 @@ public static class ModCompositor
             var id = raw["id"]?.GetValue<string>() ?? throw new ModOperationException("预组卡组定义缺少 id");
             var name = raw["name"]?.GetValue<string>() ?? id;
             var zhName = raw["zhName"]?.GetValue<string>();
+            var customCover = raw["cover"]?.GetValue<string>() ?? raw["artPath"]?.GetValue<string>();
 
             var clean = raw.DeepClone().AsObject();
             clean.Remove("zhName");
+            clean.Remove("cover");
+            clean.Remove("artPath");
             clean["date"] ??= string.Empty;
-            clean["art"] ??= "SDK";
+            var artCode = clean["art"]?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(artCode))
+            {
+                artCode = id;
+                clean["art"] = artCode;
+            }
             clean["cards"] ??= new JsonArray();
+
+            // Inject custom deck cover into assets/decks/{artCode}.jpg (where mobile.js / tag-ui.js load deck art!)
+            var coverFile = ResolveLocalEntityArt(modDir, customCover, "decks", artCode)
+                ?? ResolveLocalEntityArt(modDir, null, "decks", id);
+            if (coverFile is not null)
+            {
+                var relDeckArt = $"assets/decks/{artCode}.jpg";
+                files[relDeckArt] = File.ReadAllBytes(coverFile);
+                if (!existingZipEntries.Contains(relDeckArt)) newlyAdded.Add(relDeckArt);
+            }
 
             UpsertByStringProperty(contentPrecon, "id", id, clean);
             UpsertByStringProperty(campPrecon, "id", id, clean);
@@ -854,6 +1194,37 @@ public static class ModCompositor
 
         campaign["data/preconstructed.json"] = ModPatcher.ToJsonText(campPreconRoot);
         return total;
+    }
+
+    private static string? ResolveLocalEntityArt(string modDir, string? explicitPath, string subFolder, string key)
+    {
+        if (!string.IsNullOrWhiteSpace(explicitPath) && !explicitPath.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+        {
+            var rel = explicitPath.Replace('/', Path.DirectorySeparatorChar);
+            if (Path.IsPathRooted(rel) && File.Exists(rel)) return rel;
+            var p1 = Path.Combine(modDir, rel);
+            if (File.Exists(p1)) return p1;
+            var p2 = Path.Combine(modDir, "art", rel);
+            if (File.Exists(p2)) return p2;
+            var p3 = Path.Combine(modDir, "art", subFolder, rel);
+            if (File.Exists(p3)) return p3;
+        }
+
+        var safeKey = ModRepository.SanitizeId(key);
+        foreach (var candidateName in new[] { key, safeKey }.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(candidateName)) continue;
+            foreach (var dir in new[] { Path.Combine(modDir, "art", subFolder), Path.Combine(modDir, "art") })
+            {
+                foreach (var ext in new[] { "jpg", "jpeg", "png", "webp" })
+                {
+                    var cand = Path.Combine(dir, $"{candidateName}.{ext}");
+                    if (File.Exists(cand)) return cand;
+                }
+            }
+        }
+
+        return null;
     }
 
     private static void UpsertByStringProperty(JsonArray arr, string propName, string propVal, JsonObject item)
@@ -958,15 +1329,29 @@ public static class ModCompositor
                 zhCards[idStr] = zhEntry;
             }
 
-            foreach (var ext in new[] { "webp", "jpg", "jpeg", "png" })
+            // ALWAYS register every custom card code so assets/cards/{id}.jpg is guaranteed to exist
+            // (using local art if present, or safe fallback card-back if missing) — prevents 404 & preload crash!
+            registerCode(idStr);
+            cardAssetsTouched = true;
+            var explicitArt = rawCard["art"]?.GetValue<string>();
+            if (!string.IsNullOrWhiteSpace(explicitArt))
             {
-                var cand = Path.Combine(artDir, $"{idInt}.{ext}");
-                if (File.Exists(cand))
+                var relArt = explicitArt.Replace('/', Path.DirectorySeparatorChar);
+                var pFull = Path.IsPathRooted(relArt) ? relArt : Path.Combine(modDir, relArt);
+                var pInArt = Path.Combine(artDir, relArt);
+                if (File.Exists(pFull)) inlineArtFileByCode[idStr] = pFull;
+                else if (File.Exists(pInArt)) inlineArtFileByCode[idStr] = pInArt;
+            }
+            if (!inlineArtFileByCode.ContainsKey(idStr))
+            {
+                foreach (var ext in new[] { "webp", "jpg", "jpeg", "png" })
                 {
-                    registerCode(idStr);
-                    inlineArtFileByCode[idStr] = cand;
-                    cardAssetsTouched = true;
-                    break;
+                    var cand = Path.Combine(artDir, $"{idInt}.{ext}");
+                    if (File.Exists(cand))
+                    {
+                        inlineArtFileByCode[idStr] = cand;
+                        break;
+                    }
                 }
             }
 
@@ -1081,7 +1466,10 @@ public static class ModCompositor
             var rpy = campaign["approved_relics.py"]!.GetValue<string>();
             if (!rpy.Contains(mark, StringComparison.Ordinal))
             {
-                var pyLine = $"\n\n{mark}\nREGULAR=REGULAR+[({PyStr(key)},{PyStr(name)},{cost},{PyStr(desc)},{PyStr(themeCard)})]\n";
+                var pyArt = !string.IsNullOrWhiteSpace(themeCard)
+                    ? themeCard
+                    : (!artVal.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ? artVal : string.Empty);
+                var pyLine = $"\n\n{mark}\nREGULAR=REGULAR+[({PyStr(key)},{PyStr(name)},{cost},{PyStr(desc)},{PyStr(pyArt)})]\n";
                 campaign["approved_relics.py"] = rpy.TrimEnd() + pyLine;
             }
 
@@ -1140,6 +1528,13 @@ public static class ModCompositor
         var zhUi = zh["ui"]!.AsObject();
         var prog = ModPatcher.ParseJson(campaign["data/character-progression.json"]!.GetValue<string>()).AsObject();
         var sig = ModPatcher.ParseJson(campaign["data/character-signatures.json"]!.GetValue<string>()).AsObject();
+        var modCharsArr = campaign.ContainsKey("data/mod-characters.json") && campaign["data/mod-characters.json"] is JsonValue mcVal && mcVal.TryGetValue<string>(out var mcRaw)
+            ? (ModPatcher.ParseJson(mcRaw) as JsonArray ?? new JsonArray())
+            : new JsonArray();
+        // Core roster count in content.py BEFORE TIER_EXCLUSIVE_OPPONENTS / UC_OPPONENTS are appended (indices 0..38)
+        var coreRosterLimit = prog["starting_relics"] is JsonObject srObj
+            ? srObj.Select(kv => int.TryParse(kv.Key, out var n) ? n : -1).DefaultIfEmpty(38).Max() + 1
+            : 39;
         var unlockedToEnsure = new List<int>();
         var total = 0;
 
@@ -1190,22 +1585,44 @@ public static class ModCompositor
                 playable.Add((JsonNode?)JsonValue.Create(targetIdx));
 
             var idxStr = targetIdx.ToString(CultureInfo.InvariantCulture);
-            if (targetObj["starting_relic"]?.GetValue<string>() is { Length: > 0 } sr)
-                prog["starting_relics"]![idxStr] = sr;
-
-            if (unlockedByDefault)
-            {
-                prog["unlocks"]![idxStr] = new JsonObject
+            var unlockObj = unlockedByDefault
+                ? new JsonObject
                 {
                     ["metric"] = "wins",
                     ["target"] = 0,
                     ["description"] = "Available from the beginning"
-                };
+                }
+                : null;
+
+            // IMPORTANT: content.py loops character-progression.json["starting_relics"] and character-signatures.json
+            // BEFORE appending TIER_EXCLUSIVE_OPPONENTS / UC_OPPONENTS (so len(CHARACTERS) is only coreRosterLimit there!).
+            // Only write indices < coreRosterLimit into those JSONs; append/apply all custom characters via data/mod-characters.json
+            // AFTER content.py finishes building the full vanilla roster!
+            if (targetIdx < coreRosterLimit)
+            {
+                if (targetObj["starting_relic"]?.GetValue<string>() is { Length: > 0 } sr)
+                    prog["starting_relics"]![idxStr] = sr;
+
+                if (unlockObj is not null)
+                    prog["unlocks"]![idxStr] = unlockObj.DeepClone();
+
+                if (targetObj["cards"] is JsonArray finalCards)
+                    sig[idxStr] = finalCards.DeepClone();
+            }
+
+            if (unlockedByDefault)
+            {
                 unlockedToEnsure.Add(targetIdx);
             }
 
-            if (targetObj["cards"] is JsonArray finalCards)
-                sig[idxStr] = finalCards.DeepClone();
+            modCharsArr.Add((JsonNode?)new JsonObject
+            {
+                ["index"] = explicitIndex >= 0 ? targetIdx : -1,
+                ["targetIndex"] = targetIdx,
+                ["playable"] = true,
+                ["unlock"] = unlockObj?.DeepClone(),
+                ["data"] = targetObj.DeepClone()
+            });
 
             if (!string.IsNullOrWhiteSpace(zhName))
                 zhUi[targetObj["name"]!.GetValue<string>()] = zhName;
@@ -1215,6 +1632,40 @@ public static class ModCompositor
 
         campaign["data/character-progression.json"] = ModPatcher.ToJsonText(prog);
         campaign["data/character-signatures.json"] = ModPatcher.ToJsonText(sig);
+        campaign["data/mod-characters.json"] = ModPatcher.ToJsonText(modCharsArr);
+
+        // Inject idempotent Python loader at the very end of content.py (after opponent identities & normalize_pack_references)
+        if (campaign["content.py"] is JsonValue cpyVal && cpyVal.TryGetValue<string>(out var contentPy))
+        {
+            const string modCharMark = "# mod-characters:v2";
+            if (!contentPy.Contains(modCharMark, StringComparison.Ordinal))
+            {
+                const string modCharHook = """
+
+
+                    # mod-characters:v2
+                    _mod_chars_path=Path(__file__).parent/'data/mod-characters.json'
+                    if _mod_chars_path.exists():
+                     for _mc in json.loads(_mod_chars_path.read_text(encoding='utf8')):
+                      _m_idx=_mc.get('index',-1)
+                      _m_data=dict(_mc.get('data') or {})
+                      if isinstance(_m_idx,int) and 0<=_m_idx<len(CHARACTERS):
+                       CHARACTERS[_m_idx].update(_m_data)
+                       _tid=_m_idx
+                      else:
+                       _tid=len(CHARACTERS)
+                       CHARACTERS.append(_m_data)
+                      if _mc.get('playable',True) and _tid not in PLAYABLE_IDS:
+                       PLAYABLE_IDS.append(_tid)
+                      if _mc.get('unlock') is not None:
+                       PROGRESSION.setdefault('unlocks',{})[str(_tid)]=_mc['unlock']
+                      if _m_data.get('starting_relic'):
+                       PROGRESSION.setdefault('starting_relics',{})[str(_tid)]=_m_data['starting_relic']
+                     normalize_pack_references(CHARACTERS)
+                    """;
+                campaign["content.py"] = contentPy.TrimEnd() + modCharHook;
+            }
+        }
 
         if (unlockedToEnsure.Count > 0)
         {
@@ -1364,6 +1815,415 @@ public static class ModCompositor
         }
 
         interaction.Say($"trainer.json: 已应用修改器规则（全解锁={unlockAllChars}/{unlockAllVars}，起始金币={startingGold?.ToString() ?? $"+{startingGoldBonus}"}，免费商店={freeShop}，F8面板={inGameOverlay}）");
+    }
+
+    /// <summary>
+    /// Applies declarative campaign-config.json / removals.json:
+    /// - Removes/disables vanilla cards, playable characters, booster packs, preconstructed decks, relics, or specific boss curses
+    /// - Disables entire game systems cleanly: boss curses (诅咒系统), shadow relics (暗影遗物), relic sealing (封印系统),
+    ///   shop relic banish (放逐), or relic fusions (遗物融合)
+    /// - Tunes campaign parameters: startingGold, startingLp, bossEvery, shopPackCount, rerollBasePrice, banishPrice
+    /// </summary>
+    private static void ApplyCampaignAndRemovalsConfig(
+        string modId,
+        JsonObject cfg,
+        JsonObject content,
+        JsonObject campaign,
+        IInstallerInteraction interaction)
+    {
+        var safeId = ModRepository.SanitizeId(modId).Replace('-', '_');
+        var removals = cfg["removals"] as JsonObject ?? cfg;
+
+        static HashSet<int> ReadIntSet(JsonNode? node)
+        {
+            var set = new HashSet<int>();
+            if (node is JsonArray arr)
+            {
+                foreach (var n in arr)
+                {
+                    if (n is JsonValue v && (v.TryGetValue<int>(out var iv) || int.TryParse(v.ToString(), out iv)))
+                        set.Add(iv);
+                }
+            }
+            return set;
+        }
+
+        static HashSet<string> ReadStrSet(JsonNode? node)
+        {
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (node is JsonArray arr)
+            {
+                foreach (var n in arr)
+                {
+                    var s = n?.ToString().Trim();
+                    if (!string.IsNullOrEmpty(s)) set.Add(s);
+                }
+            }
+            return set;
+        }
+
+        var rmCards = ReadIntSet(removals["removeCardIds"] ?? removals["cards"]);
+        var rmCharIndices = ReadIntSet(removals["removeCharacterIndices"]);
+        var rmCharNames = ReadStrSet(removals["removeCharacterNames"] ?? removals["characters"]);
+        var rmPacks = ReadStrSet(removals["removePackIds"] ?? removals["packs"]);
+        var rmDecks = ReadStrSet(removals["removeDeckIds"] ?? removals["decks"]);
+        var rmRelics = ReadStrSet(removals["removeRelicKeys"] ?? removals["relics"]);
+        var rmCurses = ReadStrSet(removals["removeCurseKeys"] ?? removals["removeCurses"] ?? removals["curses"]);
+
+        var disableBossCurses = cfg["disableBossCurses"]?.GetValue<bool>() == true;
+        var disableShadowRelics = cfg["disableShadowRelics"]?.GetValue<bool>() == true;
+        var disableRelicSeal = cfg["disableRelicSeal"]?.GetValue<bool>() == true;
+        var disableRelicBanish = cfg["disableRelicBanish"]?.GetValue<bool>() == true;
+        var disableRelicFusions = cfg["disableRelicFusions"]?.GetValue<bool>() == true;
+
+        if (disableRelicSeal) rmCurses.Add("relic_seal");
+
+        var summary = new List<string>();
+
+        // 1. Remove vanilla cards from content.json -> cards, data/era-cards.json, and all packs
+        if (rmCards.Count > 0)
+        {
+            var cCards = content["cards"]?.AsArray();
+            var removedCount = 0;
+            if (cCards is not null)
+            {
+                for (var i = cCards.Count - 1; i >= 0; i--)
+                {
+                    if (cCards[i]?["id"] is JsonValue v && int.TryParse(v.ToString(), out var cid) && rmCards.Contains(cid))
+                    {
+                        cCards.RemoveAt(i);
+                        removedCount++;
+                    }
+                }
+            }
+
+            if (campaign["data/era-cards.json"] is JsonValue eraVal && eraVal.TryGetValue<string>(out var eraText))
+            {
+                var eraArr = ModPatcher.ParseJson(eraText).AsArray();
+                for (var i = eraArr.Count - 1; i >= 0; i--)
+                {
+                    if (eraArr[i]?["id"] is JsonValue v && int.TryParse(v.ToString(), out var cid) && rmCards.Contains(cid))
+                        eraArr.RemoveAt(i);
+                }
+                campaign["data/era-cards.json"] = ModPatcher.ToJsonText(eraArr);
+            }
+
+            void StripCardsFromPacks(JsonArray? packs)
+            {
+                if (packs is null) return;
+                foreach (var p in packs.OfType<JsonObject>())
+                {
+                    foreach (var tier in new[] { "common", "rare", "super", "ultra" })
+                    {
+                        if (p[tier] is not JsonArray tArr) continue;
+                        for (var i = tArr.Count - 1; i >= 0; i--)
+                        {
+                            if (tArr[i] is JsonValue v && int.TryParse(v.ToString(), out var cid) && rmCards.Contains(cid))
+                                tArr.RemoveAt(i);
+                        }
+                    }
+                }
+            }
+            StripCardsFromPacks(content["packs"]?.AsArray());
+            if (campaign["data/packs.json"] is JsonValue pkVal && pkVal.TryGetValue<string>(out var pkText))
+            {
+                var pkArr = ModPatcher.ParseJson(pkText).AsArray();
+                StripCardsFromPacks(pkArr);
+                campaign["data/packs.json"] = ModPatcher.ToJsonText(pkArr);
+            }
+            if (campaign["data/preconstructed-decks.json"] is JsonValue pdVal && pdVal.TryGetValue<string>(out var pdText))
+            {
+                var pdArr = ModPatcher.ParseJson(pdText).AsArray();
+                foreach (var d in pdArr.OfType<JsonObject>())
+                {
+                    if (d["cards"] is not JsonArray dcArr) continue;
+                    for (var i = dcArr.Count - 1; i >= 0; i--)
+                        if (dcArr[i] is JsonValue v && int.TryParse(v.ToString(), out var cid) && rmCards.Contains(cid))
+                            dcArr.RemoveAt(i);
+                }
+                campaign["data/preconstructed-decks.json"] = ModPatcher.ToJsonText(pdArr);
+            }
+            // Strip removed cards from every .ydk file in campaign-files.json so deck_files.py / endless.py never crash
+            var ydkKeys = campaign.Select(kv => kv.Key)
+                .Where(k => k.EndsWith(".ydk", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            foreach (var yk in ydkKeys)
+            {
+                if (campaign[yk] is not JsonValue yv || !yv.TryGetValue<string>(out var yText)) continue;
+                var kept = yText.Replace("\r\n", "\n").Split('\n')
+                    .Where(line => !int.TryParse(line.Trim(), out var cid) || !rmCards.Contains(cid));
+                campaign[yk] = string.Join("\n", kept);
+            }
+            if (campaign["deck_files.py"] is JsonValue dfVal && dfVal.TryGetValue<string>(out var dfPy))
+            {
+                // Make deck_files.py gracefully drop out-of-pool removed cards instead of raising ValueError
+                var patchedDf = dfPy.Replace(
+                    "if missing:raise ValueError(p.name+': unknown/out-of-pool card ID '+str(missing[0]))",
+                    "if missing:\n    cards=[c for c in cards if c in ids]\n    extra=[c for c in extra if c in ids]");
+                if (!string.Equals(patchedDf, dfPy, StringComparison.Ordinal))
+                {
+                    campaign["deck_files.py"] = patchedDf;
+                }
+            }
+            summary.Add($"删减卡牌 {removedCount} 张");
+        }
+
+        // 2. Remove/hide playable characters (keeps opponent indices intact so campaign never breaks!)
+        if (rmCharIndices.Count > 0 || rmCharNames.Count > 0)
+        {
+            var chars = content["characters"]?.AsArray();
+            if (chars is not null)
+            {
+                for (var i = 0; i < chars.Count; i++)
+                {
+                    var nm = chars[i]?["name"]?.GetValue<string>() ?? string.Empty;
+                    if (rmCharNames.Contains(nm)) rmCharIndices.Add(i);
+                }
+            }
+
+            if (rmCharIndices.Count > 0)
+            {
+                if (content["playable"] is JsonArray playable)
+                {
+                    for (var i = playable.Count - 1; i >= 0; i--)
+                    {
+                        if (playable[i] is JsonValue v && int.TryParse(v.ToString(), out var idx) && rmCharIndices.Contains(idx))
+                            playable.RemoveAt(i);
+                    }
+                }
+
+                if (campaign["content.py"] is JsonValue cpyVal && cpyVal.TryGetValue<string>(out var cpy))
+                {
+                    var mark = $"# mod-rm-chars:{safeId}";
+                    if (!cpy.Contains(mark, StringComparison.Ordinal))
+                    {
+                        var pySet = string.Join(",", rmCharIndices);
+                        cpy = cpy.TrimEnd() + $"\n\n{mark}\nPLAYABLE_IDS=tuple(i for i in PLAYABLE_IDS if i not in {{{pySet}}})\n";
+                        campaign["content.py"] = cpy;
+                    }
+                }
+                summary.Add($"禁用可选角色 {rmCharIndices.Count} 个");
+            }
+        }
+
+        // 3. Remove booster packs
+        if (rmPacks.Count > 0)
+        {
+            void RemovePacksFrom(JsonArray? packs)
+            {
+                if (packs is null) return;
+                for (var i = packs.Count - 1; i >= 0; i--)
+                {
+                    var pid = packs[i]?["id"]?.GetValue<string>();
+                    if (!string.IsNullOrEmpty(pid) && rmPacks.Contains(pid)) packs.RemoveAt(i);
+                }
+            }
+            RemovePacksFrom(content["packs"]?.AsArray());
+            if (campaign["data/packs.json"] is JsonValue pkVal && pkVal.TryGetValue<string>(out var pkText))
+            {
+                var pkArr = ModPatcher.ParseJson(pkText).AsArray();
+                RemovePacksFrom(pkArr);
+                campaign["data/packs.json"] = ModPatcher.ToJsonText(pkArr);
+            }
+            summary.Add($"删减卡包 {rmPacks.Count} 个");
+        }
+
+        // 4. Remove preconstructed decks
+        if (rmDecks.Count > 0)
+        {
+            void RemoveDecksFrom(JsonArray? decks)
+            {
+                if (decks is null) return;
+                for (var i = decks.Count - 1; i >= 0; i--)
+                {
+                    var did = decks[i]?["id"]?.GetValue<string>();
+                    if (!string.IsNullOrEmpty(did) && rmDecks.Contains(did)) decks.RemoveAt(i);
+                }
+            }
+            RemoveDecksFrom(content["preconstructedDecks"]?.AsArray());
+            if (campaign["data/preconstructed.json"] is JsonValue dVal && dVal.TryGetValue<string>(out var dText))
+            {
+                var root = ModPatcher.ParseJson(dText);
+                RemoveDecksFrom(root is JsonObject o ? o["decks"] as JsonArray : root as JsonArray);
+                campaign["data/preconstructed.json"] = ModPatcher.ToJsonText(root);
+            }
+            summary.Add($"删减预组卡组 {rmDecks.Count} 套");
+        }
+
+        // 5. Remove/retire relics (cleanly excluded from shop, random pools & shadow relic offers)
+        if (rmRelics.Count > 0)
+        {
+            var pyRelicList = string.Join(",", rmRelics.Select(PyStr));
+            if (campaign["content.py"] is JsonValue cpyVal && cpyVal.TryGetValue<string>(out var cpy))
+            {
+                var mark = $"# mod-rm-relics:{safeId}";
+                if (!cpy.Contains(mark, StringComparison.Ordinal))
+                {
+                    cpy = cpy.TrimEnd() + $"\n\n{mark}\nRETIRED_ARTIFACTS=RETIRED_ARTIFACTS|frozenset({{{pyRelicList}}})\n";
+                    campaign["content.py"] = cpy;
+                }
+            }
+            if (campaign["approved_relics.py"] is JsonValue arVal && arVal.TryGetValue<string>(out var arPy))
+            {
+                var mark = $"# mod-rm-relics:{safeId}";
+                if (!arPy.Contains(mark, StringComparison.Ordinal))
+                {
+                    arPy = arPy.TrimEnd() + $"\n\n{mark}\nREMOVED=REMOVED|frozenset({{{pyRelicList}}})\n";
+                    campaign["approved_relics.py"] = arPy;
+                }
+            }
+            if (campaign["data/cursed-relics.json"] is JsonValue crVal && crVal.TryGetValue<string>(out var crText))
+            {
+                var crObj = ModPatcher.ParseJson(crText).AsObject();
+                if (crObj["approved"] is JsonArray crArr)
+                {
+                    for (var i = crArr.Count - 1; i >= 0; i--)
+                    {
+                        var k = crArr[i]?.GetValue<string>();
+                        if (!string.IsNullOrEmpty(k) && rmRelics.Contains(k)) crArr.RemoveAt(i);
+                    }
+                    campaign["data/cursed-relics.json"] = ModPatcher.ToJsonText(crObj);
+                }
+            }
+            summary.Add($"禁用遗物 {rmRelics.Count} 个");
+        }
+
+        // 6. Remove specific curses or disable entire Boss Curse / Shadow Relic / Sealing / Banish / Fusion systems
+        if (rmCurses.Count > 0 && campaign["content.py"] is JsonValue curseCpyVal && curseCpyVal.TryGetValue<string>(out var curseCpy))
+        {
+            var mark = $"# mod-rm-curses:{safeId}";
+            if (!curseCpy.Contains(mark, StringComparison.Ordinal))
+            {
+                var pyCurses = string.Join(",", rmCurses.Select(PyStr));
+                curseCpy = curseCpy.TrimEnd() + $"\n\n{mark}\nfor _ck in ({pyCurses},):\n CURSES.pop(_ck,None)\n";
+                campaign["content.py"] = curseCpy;
+            }
+            summary.Add($"禁用特定诅咒 {rmCurses.Count} 个");
+        }
+
+        if (disableBossCurses && campaign["feedback_update.py"] is JsonValue fuVal && fuVal.TryGetValue<string>(out var fuPy))
+        {
+            var mark = $"# mod-disable-boss-curses:{safeId}";
+            if (!fuPy.Contains(mark, StringComparison.Ordinal))
+            {
+                fuPy = fuPy.TrimEnd() + $"\n\n{mark}\ndef draw_curses(*args,**kwargs):return []\n";
+                campaign["feedback_update.py"] = fuPy;
+            }
+            summary.Add("已关闭 Boss/路线诅咒系统");
+        }
+
+        if (disableShadowRelics && campaign["cursed_relics.py"] is JsonValue shVal && shVal.TryGetValue<string>(out var shPy))
+        {
+            var mark = $"# mod-disable-shadow-relics:{safeId}";
+            if (!shPy.Contains(mark, StringComparison.Ordinal))
+            {
+                shPy = shPy.TrimEnd() + $"\n\n{mark}\ndef create_offer(run,rng=None):\n if isinstance(run,dict):run.pop('cursed_offer',None)\n";
+                campaign["cursed_relics.py"] = shPy;
+            }
+            summary.Add("已关闭暗影诅咒遗物系统");
+        }
+
+        if (disableRelicSeal && campaign["approved_relics.py"] is JsonValue sealVal && sealVal.TryGetValue<string>(out var sealPy))
+        {
+            var mark = $"# mod-disable-relic-seal:{safeId}";
+            if (!sealPy.Contains(mark, StringComparison.Ordinal))
+            {
+                sealPy = sealPy.TrimEnd() + $"\n\n{mark}\n_orig_duel_run_{safeId}=duel_run\ndef duel_run(run):\n if isinstance(run,dict):\n  run=dict(run);run['curses']=[c for c in run.get('curses',[]) if c!='relic_seal'];run['sealed_relics']=[]\n return _orig_duel_run_{safeId}(run)\n";
+                campaign["approved_relics.py"] = sealPy;
+            }
+            summary.Add("已关闭遗物封印系统 (Relic Seal)");
+        }
+
+        if (disableRelicFusions && campaign["relic_fusions.py"] is JsonValue rfVal && rfVal.TryGetValue<string>(out var rfPy))
+        {
+            var mark = $"# mod-disable-relic-fusions:{safeId}";
+            if (!rfPy.Contains(mark, StringComparison.Ordinal))
+            {
+                rfPy = rfPy.TrimEnd() + $"\n\n{mark}\ndef fuse(run):return []\n";
+                campaign["relic_fusions.py"] = rfPy;
+            }
+            summary.Add("已关闭遗物融合系统");
+        }
+
+        // 7. Campaign numeric tuning rules (startingGold, startingLp, bossEvery, shopPackCount, rerollBasePrice, banishPrice, disableRelicBanish)
+        int? cfgStartGold = cfg["startingGold"]?.GetValue<int?>();
+        int? cfgStartLp = cfg["startingLp"]?.GetValue<int?>();
+        int? cfgBossEvery = cfg["bossEvery"]?.GetValue<int?>();
+        int? cfgShopPacks = cfg["shopPackCount"]?.GetValue<int?>();
+        int? cfgRerollPrice = cfg["rerollBasePrice"]?.GetValue<int?>();
+        int? cfgBanishPrice = cfg["banishPrice"]?.GetValue<int?>();
+
+        if (cfgBossEvery is >= 1 and <= 20 && campaign["content.py"] is JsonValue ctBossVal && ctBossVal.TryGetValue<string>(out var ctBossPy))
+        {
+            ctBossPy = Regex.Replace(ctBossPy, @"\bBOSS_EVERY\s*=\s*\d+", $"BOSS_EVERY={cfgBossEvery.Value}");
+            campaign["content.py"] = ctBossPy;
+            summary.Add($"Boss 间隔={cfgBossEvery.Value} 战");
+        }
+
+        if (cfgShopPacks.HasValue || cfgBanishPrice.HasValue || disableRelicBanish)
+        {
+            if (campaign["campaign_expansion.py"] is JsonValue ceVal && ceVal.TryGetValue<string>(out var cePy))
+            {
+                if (cfgBanishPrice is >= 0)
+                {
+                    cePy = Regex.Replace(cePy, @"\bBANISH_PRICE\s*=\s*\d+", $"BANISH_PRICE={cfgBanishPrice.Value}");
+                    summary.Add($"遗物放逐初始价={cfgBanishPrice.Value}");
+                }
+                if (cfgShopPacks is >= 1 and <= 8)
+                {
+                    var mark = $"# mod-shop-packs:{safeId}";
+                    if (!cePy.Contains(mark, StringComparison.Ordinal))
+                    {
+                        cePy = cePy.TrimEnd() + $"\n\n{mark}\n_orig_shop_pack_count_{safeId}=shop_pack_count\ndef shop_pack_count(run):return max({cfgShopPacks.Value},_orig_shop_pack_count_{safeId}(run))\n";
+                    }
+                    summary.Add($"商店卡包栏位>={cfgShopPacks.Value}");
+                }
+                if (disableRelicBanish)
+                {
+                    cePy = cePy.Replace(
+                        "def banish_relic(run,index,rng=random):",
+                        "def banish_relic(run,index,rng=random):\n  raise ValueError('Relic banishing is disabled by MOD.')\n def _disabled_banish_relic(run,index,rng=random):",
+                        StringComparison.Ordinal);
+                    summary.Add("已关闭商店遗物放逐");
+                }
+                campaign["campaign_expansion.py"] = cePy;
+            }
+        }
+
+        if ((cfgStartGold.HasValue || cfgStartLp.HasValue || cfgRerollPrice.HasValue) &&
+            campaign["campaign.py"] is JsonValue campVal && campVal.TryGetValue<string>(out var campPy))
+        {
+            var mark = $"# mod-campaign-cfg:{safeId}";
+            if (!campPy.Contains(mark, StringComparison.Ordinal))
+            {
+                var sb = new StringBuilder();
+                sb.Append("\n\n").Append(mark).Append('\n');
+                if (cfgStartGold.HasValue || cfgStartLp.HasValue)
+                {
+                    sb.Append($"_cc_new_run_{safeId}=new_run\n");
+                    sb.Append("def new_run(*args,**kwargs):\n");
+                    sb.Append($" r=_cc_new_run_{safeId}(*args,**kwargs)\n");
+                    if (cfgStartGold.HasValue) sb.Append($" r['gold']={cfgStartGold.Value}\n");
+                    if (cfgStartLp.HasValue) sb.Append($" r['lp']={cfgStartLp.Value}\n");
+                    sb.Append(" return r\n");
+                }
+                if (cfgRerollPrice is >= 0)
+                {
+                    sb.Append($"if 'reroll_price' in globals():\n");
+                    sb.Append($" _cc_rp_{safeId}=reroll_price\n");
+                    sb.Append($" def reroll_price(run):return 0 if _cc_rp_{safeId}(run)==0 else {cfgRerollPrice.Value}\n");
+                }
+                campaign["campaign.py"] = campPy.TrimEnd() + sb.ToString();
+            }
+            if (cfgStartGold.HasValue) summary.Add($"初始金币={cfgStartGold.Value}");
+            if (cfgStartLp.HasValue) summary.Add($"初始LP={cfgStartLp.Value}");
+            if (cfgRerollPrice.HasValue) summary.Add($"刷新价={cfgRerollPrice.Value}");
+        }
+
+        if (summary.Count > 0)
+        {
+            interaction.Say($"campaign/removals: {string.Join(" · ", summary)}");
+        }
     }
 
     private static string PyStr(string text)

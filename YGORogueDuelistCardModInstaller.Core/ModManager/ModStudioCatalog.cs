@@ -177,7 +177,7 @@ public static class ModStudioCatalog
 
         StudioImageRef ResolveCharacterImage(string sprite, int? index)
         {
-            var local = FindLocalArt(sprite);
+            var local = FindLocalArt(sprite) ?? FindLocalArt($"characters/{sprite}");
             if (local is not null) return new StudioImageRef(local, null, null);
             var v = ResolveVanilla(
                 string.IsNullOrWhiteSpace(sprite) ? null : $"assets/{sprite}",
@@ -203,13 +203,34 @@ public static class ModStudioCatalog
             return new StudioImageRef(null, null, v);
         }
 
-        StudioImageRef ResolvePackImage(string packId, string code, IEnumerable<int> cardIds)
+        string? FindExplicitModFile(string? relOrAbs)
         {
-            var local = FindLocalArt(packId) ?? FindLocalArt(code);
+            if (string.IsNullOrWhiteSpace(relOrAbs) || relOrAbs.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                return null;
+            var norm = relOrAbs.Replace('/', Path.DirectorySeparatorChar);
+            if (Path.IsPathRooted(norm) && File.Exists(norm)) return norm;
+            var p1 = Path.Combine(modDir, norm);
+            if (File.Exists(p1)) return p1;
+            var p2 = Path.Combine(modDir, "art", norm);
+            if (File.Exists(p2)) return p2;
+            return null;
+        }
+
+        StudioImageRef ResolvePackImage(string packId, string code, IEnumerable<int> cardIds, string? explicitCover = null)
+        {
+            var local = FindExplicitModFile(explicitCover)
+                ?? FindLocalArt($"packs/{packId}")
+                ?? FindLocalArt($"packs/{ModRepository.SanitizeId(packId)}")
+                ?? FindLocalArt(packId)
+                ?? FindLocalArt(code);
             if (local is not null) return new StudioImageRef(local, null, null);
+            foreach (var cid in cardIds)
+            {
+                if (cid <= 0) continue;
+                var localCard = FindLocalArt(cid.ToString(CultureInfo.InvariantCulture));
+                if (localCard is not null) return new StudioImageRef(localCard, null, null);
+            }
             var firstId = cardIds.FirstOrDefault();
-            var localCard = firstId > 0 ? FindLocalArt(firstId.ToString(CultureInfo.InvariantCulture)) : null;
-            if (localCard is not null) return new StudioImageRef(localCard, null, null);
             var v = ResolveVanilla(
                 $"assets/packs/{packId}.jpg",
                 $"assets/packs/{packId}.png",
@@ -219,11 +240,18 @@ public static class ModStudioCatalog
             return new StudioImageRef(null, null, v);
         }
 
-        StudioImageRef ResolveDeckImage(string deckId, string art, IEnumerable<int> cardIds)
+        StudioImageRef ResolveDeckImage(string deckId, string art, IEnumerable<int> cardIds, string? explicitCover = null)
         {
-            var local = FindLocalArt(deckId) ?? FindLocalArt(art);
+            var local = FindExplicitModFile(explicitCover)
+                ?? FindLocalArt($"decks/{art}")
+                ?? FindLocalArt($"decks/{deckId}")
+                ?? FindLocalArt($"decks/{ModRepository.SanitizeId(deckId)}")
+                ?? FindLocalArt(deckId)
+                ?? FindLocalArt(art);
             if (local is not null) return new StudioImageRef(local, null, null);
             var firstId = cardIds.FirstOrDefault();
+            var localCard = firstId > 0 ? FindLocalArt(firstId.ToString(CultureInfo.InvariantCulture)) : null;
+            if (localCard is not null) return new StudioImageRef(localCard, null, null);
             var v = ResolveVanilla(
                 string.IsNullOrWhiteSpace(art) ? null : $"assets/decks/{art}.jpg",
                 string.IsNullOrWhiteSpace(art) ? null : $"assets/decks/EN-{art}.jpg",
@@ -460,7 +488,7 @@ public static class ModStudioCatalog
                 ultra,
                 sourceTag,
                 sourcePath,
-                ResolvePackImage(id, code, allIds)));
+                ResolvePackImage(id, code, allIds, TryGetStr(obj["cover"], TryGetStr(obj["art"])))));
         }
 
         foreach (var file in ModRepository.EnumerateDeclarativePackFiles(modDir))
@@ -489,7 +517,7 @@ public static class ModStudioCatalog
                 false,
                 sourceTag,
                 sourcePath,
-                ResolveDeckImage(id, art, cardIds)));
+                ResolveDeckImage(id, art, cardIds, TryGetStr(obj["cover"], TryGetStr(obj["artPath"])))));
         }
 
         foreach (var file in ModRepository.EnumerateDeclarativePreconstructedFiles(modDir))

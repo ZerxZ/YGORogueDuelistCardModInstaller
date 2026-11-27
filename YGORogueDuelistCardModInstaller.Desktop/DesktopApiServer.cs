@@ -38,6 +38,8 @@ public sealed partial class DesktopApiServer : IDisposable
     private StudioFocusContext _studioFocus = new();
     private CancellationTokenSource? _activeDownloadCts;
     private string? _activeDownloadLabel;
+    private string? _lastProgressStatus;
+    private double? _lastProgressPercent;
 
     private HttpListener? _listener;
     private CancellationTokenSource? _cts;
@@ -198,6 +200,22 @@ public sealed partial class DesktopApiServer : IDisposable
                 return;
             }
 
+            if (path.Equals("/api/studio/ypk/upload", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(req.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase))
+            {
+                var ypkRes = await HandleStudioUploadYpkAsync(req, ct);
+                await WriteJsonAsync(res, 200, ypkRes, ct);
+                return;
+            }
+
+            if (path.Equals("/api/studio/art/upload", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(req.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase))
+            {
+                var artRes = await HandleStudioUploadArtAsync(req, ct);
+                await WriteJsonAsync(res, 200, artRes, ct);
+                return;
+            }
+
             if (path.StartsWith("/api/", StringComparison.OrdinalIgnoreCase))
             {
                 var body = string.Equals(req.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase)
@@ -253,7 +271,7 @@ public sealed partial class DesktopApiServer : IDisposable
             "/api/apply" => await HandleApplyAsync(body, ct),
             "/api/restore" => await HandleRestoreAsync(body, ct),
             "/api/update-game" => await HandleUpdateGameAsync(ct),
-            "/api/launch" => HandleLaunchGame(),
+            "/api/launch" => await HandleLaunchGameAsync(ct),
             "/api/hotreload/status" => BuildHotReloadStatusPayload(),
             "/api/hotreload/start" => await HandleHotReloadStartAsync(body, ct),
             "/api/hotreload/stop" => HandleHotReloadStop(),
@@ -268,7 +286,10 @@ public sealed partial class DesktopApiServer : IDisposable
             "/api/studio/pack/save" => await HandleStudioSavePackAsync(body),
             "/api/studio/deck/save" => await HandleStudioSaveDeckAsync(body),
             "/api/studio/ydk/import" => await HandleStudioImportYdkAsync(body),
+            "/api/studio/ypk/import" => await HandleStudioImportYpkAsync(body),
             "/api/studio/trainer/save" => await HandleStudioSaveTrainerAsync(body),
+            "/api/studio/campaign" => HandleStudioGetCampaign(req),
+            "/api/studio/campaign/save" => await HandleStudioSaveCampaignAsync(body),
             "/api/studio/dsl/scaffold" => await HandleStudioScaffoldDslAsync(body),
             "/api/studio/item/delete" => await HandleStudioDeleteItemAsync(body),
             "/api/studio/file" when method.Equals("GET", StringComparison.OrdinalIgnoreCase) => HandleStudioReadFile(req),
@@ -284,6 +305,8 @@ public sealed partial class DesktopApiServer : IDisposable
             "/api/updates/download-game" => await HandleDownloadGameUpdateAsync(body, ct),
             "/api/updates/download-manager" => await HandleDownloadManagerUpdateAsync(body, ct),
             "/api/updates/cancel" => HandleCancelDownload(),
+            "/api/export/linux-bundle" => await HandleExportLinuxBundleAsync(body, ct),
+            "/api/export/android-bundle" => await HandleExportAndroidBundleAsync(body, ct),
             "/api/vanilla/dll-info" => HandleVanillaDllInfo(),
             "/api/vanilla/catalog" => HandleVanillaCatalog(req),
             "/api/vanilla/detail" => HandleVanillaDetail(req),
@@ -397,6 +420,9 @@ public sealed partial class DesktopApiServer : IDisposable
             ["modsRoot"] = status.ModsRoot,
             ["installDir"] = status.InstallDir ?? string.Empty,
             ["gameBaseDir"] = status.GameBaseDir ?? string.Empty,
+            ["hasGameExe"] = !string.IsNullOrWhiteSpace(status.InstallDir) && File.Exists(Path.Combine(status.InstallDir, GameLocator.GameExeName)),
+            ["hasWebBundle"] = !string.IsNullOrWhiteSpace(status.ActiveBaseGameVersion),
+            ["gameInstalled"] = !string.IsNullOrWhiteSpace(status.InstallDir) || !string.IsNullOrWhiteSpace(status.ActiveBaseGameVersion),
             ["picsDir"] = state.PicsDir ?? GameLocator.FindPicsDir() ?? string.Empty,
             ["repo"] = string.IsNullOrWhiteSpace(state.Repo) ? InstallOptions.DefaultRepo : state.Repo,
             ["githubProxy"] = GitHubReleaseService.NormalizeProxyPrefix(state.GitHubProxy),
@@ -406,6 +432,13 @@ public sealed partial class DesktopApiServer : IDisposable
             ["mcpToolCount"] = McpToolDispatcher.BuildToolDefinitions().Count,
             ["isDownloading"] = _activeDownloadCts is not null,
             ["activeDownloadLabel"] = _activeDownloadLabel,
+            ["downloadProgress"] = new JsonObject
+            {
+                ["active"] = _activeDownloadCts is not null,
+                ["label"] = _activeDownloadLabel,
+                ["status"] = _lastProgressStatus,
+                ["percent"] = _lastProgressPercent
+            },
             ["activeBaseGameVersion"] = status.ActiveBaseGameVersion,
             ["launcherBuild"] = status.LauncherMeta?.LauncherBuild ?? 0,
             ["mode"] = status.Mode.ToString(),
@@ -627,12 +660,13 @@ public sealed partial class DesktopApiServer : IDisposable
 
     private async Task<JsonObject> HandleImportUploadAsync(HttpListenerRequest req, CancellationToken ct)
     {
-        var fileName = Path.GetFileName(Query(req, "fileName", "upload.zip"));
-        var isZip = fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
+        var fileName = Path.GetFileName(Query(req, "fileName", "upload.yrdpk"));
+        var isArchive = fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ||
+                        fileName.EndsWith(".yrdpk", StringComparison.OrdinalIgnoreCase);
         var isYpk = fileName.EndsWith(".ypk", StringComparison.OrdinalIgnoreCase);
-        if (!isZip && !isYpk)
+        if (!isArchive && !isYpk)
         {
-            throw new ModOperationException("仅支持拖拽导入 .zip / .ypk 格式的 MOD、YGOPro 扩展包或工作区整合包。");
+            throw new ModOperationException("仅支持拖拽导入 .yrdpk / .zip / .ypk 格式的 MOD、YGOPro 扩展包或工作区整合包。");
         }
 
         var tempDir = Path.Combine(Path.GetTempPath(), $"ygo-drop-{Guid.NewGuid():N}");
@@ -870,11 +904,16 @@ public sealed partial class DesktopApiServer : IDisposable
                 hrPort = _hotReloadServer?.Port;
             }
 
+            var launchAfter = Bool(body, "launchAfter", false);
+            var statusBefore = engine.GetStatus();
+            var hasExe = !string.IsNullOrWhiteSpace(statusBefore.InstallDir) &&
+                         File.Exists(Path.Combine(statusBefore.InstallDir, GameLocator.GameExeName));
+
             await engine.ApplyAsync(new ApplyModsOptions
             {
                 ModeOverride = modeOverride,
                 BuildOnlyDir = NullIfBlank(Str(body, "buildOnlyDir")),
-                LaunchGameAfter = Bool(body, "launchAfter", false),
+                LaunchGameAfter = launchAfter && hasExe,
                 DeveloperModeOverride = body["developerMode"] is JsonValue dv && dv.TryGetValue<bool>(out var dev) ? dev : null,
                 IgnoreVersionRequirements = Bool(body, "ignoreVersion", false),
                 AssumeYes = true,
@@ -882,8 +921,27 @@ public sealed partial class DesktopApiServer : IDisposable
                 HotReloadPort = hrPort
             }, interaction, ct);
 
+            string? launchedWebUrl = null;
+            if (launchAfter && !hasExe && string.IsNullOrWhiteSpace(Str(body, "buildOnlyDir")))
+            {
+                if (_hotReloadServer is not { IsRunning: true })
+                {
+                    await StartHotReloadInternalAsync(ModHotReloadServer.DefaultPort, ct);
+                }
+                launchedWebUrl = _hotReloadServer?.BaseUrl;
+                if (!string.IsNullOrWhiteSpace(launchedWebUrl))
+                {
+                    try
+                    {
+                        Process.Start(new ProcessStartInfo { FileName = launchedWebUrl, UseShellExecute = true });
+                    }
+                    catch { /* ignore on headless hosts */ }
+                    EmitLog(LogLevel.Ok, $"未检测到原版 EXE，已自动以独立 web-.zip 模式启动并打开浏览器：{launchedWebUrl}");
+                }
+            }
+
             EmitProgress("Completed", 100);
-            return new JsonObject { ["ok"] = true };
+            return new JsonObject { ["ok"] = true, ["launchedWebUrl"] = launchedWebUrl };
         }
         finally
         {
@@ -926,12 +984,31 @@ public sealed partial class DesktopApiServer : IDisposable
         }
     }
 
-    private JsonObject HandleLaunchGame()
+    private async Task<JsonObject> HandleLaunchGameAsync(CancellationToken ct)
     {
-        var state = GetEngine().Repository.LoadState();
-        ModInjectionEngine.LaunchGame(state.InstallDir);
-        EmitLog(LogLevel.Ok, "Launched Yu-Gi-Oh! Rogue Duelist.");
-        return new JsonObject { ["ok"] = true };
+        var status = GetEngine().GetStatus();
+        var hasExe = !string.IsNullOrWhiteSpace(status.InstallDir) &&
+                     File.Exists(Path.Combine(status.InstallDir, GameLocator.GameExeName));
+        if (hasExe)
+        {
+            ModInjectionEngine.LaunchGame(status.InstallDir);
+            EmitLog(LogLevel.Ok, "Launched Yu-Gi-Oh! Rogue Duelist.");
+            return new JsonObject { ["ok"] = true, ["mode"] = "exe" };
+        }
+
+        if (string.IsNullOrWhiteSpace(status.ActiveBaseGameVersion))
+        {
+            throw new ModOperationException("未检测到原版 EXE 或独立 web-*.zip 数据包，请先点击「下载 web-.zip 立即开玩」。");
+        }
+
+        if (_hotReloadServer is not { IsRunning: true })
+        {
+            await StartHotReloadInternalAsync(ModHotReloadServer.DefaultPort, ct);
+        }
+        var url = _hotReloadServer?.BaseUrl ?? "http://127.0.0.1:17845/";
+        try { Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true }); } catch { }
+        EmitLog(LogLevel.Ok, $"独立 web-.zip 模式：已在默认浏览器打开 {url}");
+        return new JsonObject { ["ok"] = true, ["mode"] = "web", ["url"] = url };
     }
 
     // ==================== HOT-RELOAD ====================
@@ -941,6 +1018,8 @@ public sealed partial class DesktopApiServer : IDisposable
         ["running"] = _hotReloadServer is { IsRunning: true },
         ["port"] = _hotReloadServer?.Port ?? 0,
         ["url"] = _hotReloadServer is { IsRunning: true } ? _hotReloadServer.BaseUrl : null,
+        ["lanBound"] = _hotReloadServer is { IsRunning: true, LanBound: true },
+        ["lanUrls"] = ToStrArray(_hotReloadServer is { IsRunning: true } ? _hotReloadServer.LanUrls : []),
         ["revision"] = _hotReloadServer?.Revision ?? 0,
         ["lastError"] = _hotReloadServer?.LastError
     };
@@ -1055,6 +1134,10 @@ public sealed partial class DesktopApiServer : IDisposable
                 MakeOpt("gain_lp", "Gain 1000 LP / 回复 1000 基本分", ModStudioService.BuildLuaCardTemplate("gain_lp", 190010001, "Custom Card")),
                 MakeOpt("destroy_monster", "Destroy 1 Opp Monster / 破坏对方 1 只怪兽", ModStudioService.BuildLuaCardTemplate("destroy_monster", 190010001, "Custom Card")),
                 MakeOpt("monster_summon_draw", "On Summon Draw 1 / 召唤抽 1", ModStudioService.BuildLuaCardTemplate("monster_summon_draw", 190010001, "Custom Card")),
+                MakeOpt("synchro_monster", "Synchro Summon (5D's) / 同调怪兽模板", ModStudioService.BuildLuaCardTemplate("synchro_monster", 190010001, "Custom Synchro")),
+                MakeOpt("xyz_monster", "Xyz Summon (ZEXAL) / 超量怪兽模板", ModStudioService.BuildLuaCardTemplate("xyz_monster", 190010001, "Custom Xyz")),
+                MakeOpt("pendulum_monster", "Pendulum Scale (ARC-V) / 灵摆怪兽模板", ModStudioService.BuildLuaCardTemplate("pendulum_monster", 190010001, "Custom Pendulum")),
+                MakeOpt("link_monster", "Link Summon (VRAINS) / 连接怪兽模板", ModStudioService.BuildLuaCardTemplate("link_monster", 190010001, "Custom Link")),
                 MakeOpt("blank", "Blank Skeleton / 空白骨架", ModStudioService.BuildLuaCardTemplate("blank", 190010001, "Custom Card"))),
             ["luaRelicTemplates"] = new JsonArray(
                 MakeOpt("gain_lp", "Gain 1000 LP / 回复 1000 LP", ModStudioService.BuildLuaRelicTemplate("gain_lp")),
@@ -1097,6 +1180,12 @@ public sealed partial class DesktopApiServer : IDisposable
         var snap = GetOrLoadStudioSnapshot(modId);
         var vanilla = TryGetVanillaCatalog();
 
+        var campaignCfgExists = File.Exists(Path.Combine(snap.ModDir, "campaign-config.json")) ||
+                                File.Exists(Path.Combine(snap.ModDir, "removals.json"));
+        var campaignPyCount = Directory.Exists(Path.Combine(snap.ModDir, "campaign"))
+            ? Directory.GetFiles(Path.Combine(snap.ModDir, "campaign"), "*", SearchOption.AllDirectories).Length
+            : 0;
+
         var counts = new JsonObject
         {
             ["cards"] = snap.Cards.Count,
@@ -1105,6 +1194,7 @@ public sealed partial class DesktopApiServer : IDisposable
             ["packs"] = snap.Packs.Count,
             ["decks"] = snap.Decks.Count,
             ["trainer"] = snap.Trainer.Exists ? 1 : 0,
+            ["campaign"] = (campaignCfgExists ? 1 : 0) + campaignPyCount,
             ["code"] = snap.TextFiles.Count
         };
 
@@ -1215,6 +1305,7 @@ public sealed partial class DesktopApiServer : IDisposable
                     ["totalCards"] = p.TotalCardCount,
                     ["sourceTag"] = p.SourceTag,
                     ["sourceFilePath"] = p.SourceFilePath,
+                    ["artLocalPath"] = p.Image.LocalFilePath ?? string.Empty,
                     ["imageUrl"] = BuildStudioImageUrl(snap, p.Image),
                     ["subCards"] = BuildSubCardsByIds(snap, vanilla, allIds)
                 });
@@ -1233,6 +1324,7 @@ public sealed partial class DesktopApiServer : IDisposable
                     ["name"] = d.Name,
                     ["zhName"] = d.ZhName,
                     ["art"] = d.Art,
+                    ["artLocalPath"] = d.Image.LocalFilePath ?? string.Empty,
                     ["cardIds"] = ToIntArray(d.CardIds),
                     ["isYdk"] = d.IsYdk,
                     ["sourceTag"] = d.SourceTag,
@@ -1349,7 +1441,8 @@ public sealed partial class DesktopApiServer : IDisposable
         var saved = ModStudioService.SaveVisualPack(
             mod.DirectoryPath, Str(body, "id"), Str(body, "name"), NullIfBlank(Str(body, "zhName")),
             Str(body, "code"), IntVal(body, "size", 9),
-            Str(body, "commonIds"), Str(body, "rareIds"), Str(body, "superIds"), Str(body, "ultraIds"));
+            Str(body, "commonIds"), Str(body, "rareIds"), Str(body, "superIds"), Str(body, "ultraIds"),
+            NullIfBlank(Str(body, "coverPath")));
 
         InvalidateStudioCache();
         EmitLog(LogLevel.Ok, $"Saved Booster Pack -> {saved}");
@@ -1362,12 +1455,71 @@ public sealed partial class DesktopApiServer : IDisposable
         var mod = ResolveManagedMod(Str(body, "modId"));
         var saved = ModStudioService.SaveVisualPreconstructedDeck(
             mod.DirectoryPath, Str(body, "id"), Str(body, "name"), NullIfBlank(Str(body, "zhName")),
-            Str(body, "art", "SDK"), Str(body, "cardIds"));
+            Str(body, "art", "SDK"), Str(body, "cardIds"),
+            NullIfBlank(Str(body, "coverPath")));
 
         InvalidateStudioCache();
         EmitLog(LogLevel.Ok, $"Saved Preconstructed Deck -> {saved}");
         await TriggerHotReloadIfRunningAsync(Path.GetFileName(saved));
         return new JsonObject { ["ok"] = true, ["path"] = saved };
+    }
+
+    private async Task<JsonObject> HandleStudioUploadArtAsync(HttpListenerRequest req, CancellationToken ct)
+    {
+        var modId = Query(req, "modId");
+        var kind = Query(req, "kind", "card").ToLowerInvariant();
+        var key = Query(req, "key", "custom");
+        var fileName = Path.GetFileName(Query(req, "fileName", "art.png"));
+        var mod = ResolveManagedMod(modId);
+
+        var ext = Path.GetExtension(fileName).ToLowerInvariant();
+        if (ext is not (".png" or ".jpg" or ".jpeg" or ".webp" or ".gif" or ".svg")) ext = ".png";
+
+        using var ms = new MemoryStream();
+        await req.InputStream.CopyToAsync(ms, ct);
+        if (ms.Length == 0) throw new ModOperationException("上传的图片内容为空。");
+        if (ms.Length > 20 * 1024 * 1024) throw new ModOperationException("上传的图片不能超过 20 MB。");
+
+        var safeKey = kind == "card"
+            ? new string(key.Where(char.IsDigit).ToArray())
+            : ModRepository.SanitizeId(key);
+        if (string.IsNullOrWhiteSpace(safeKey)) safeKey = "custom";
+
+        string targetSubDir = kind switch
+        {
+            "pack" => Path.Combine("art", "packs"),
+            "deck" => Path.Combine("art", "decks"),
+            "character" => Path.Combine("art", "characters"),
+            _ => "art"
+        };
+        var outFileName = kind == "relic" ? $"relic_{safeKey.Replace('-', '_')}{ext}" : $"{safeKey}{ext}";
+        if (kind == "pack" && !string.IsNullOrWhiteSpace(key))
+        {
+            // Keep exact pack ID (e.g. YPK-CUSTOM-MOD.jpg) if filename-safe
+            var cleanPack = key.Trim();
+            if (cleanPack.IndexOfAny(Path.GetInvalidFileNameChars()) < 0) outFileName = $"{cleanPack}{ext}";
+        }
+        if (kind == "deck" && !string.IsNullOrWhiteSpace(key))
+        {
+            var cleanDeck = key.Trim();
+            if (cleanDeck.IndexOfAny(Path.GetInvalidFileNameChars()) < 0) outFileName = $"{cleanDeck}{ext}";
+        }
+
+        var fullDir = Path.Combine(mod.DirectoryPath, targetSubDir);
+        Directory.CreateDirectory(fullDir);
+        var fullPath = Path.Combine(fullDir, outFileName);
+        await File.WriteAllBytesAsync(fullPath, ms.ToArray(), ct);
+
+        var relPath = Path.GetRelativePath(mod.DirectoryPath, fullPath).Replace('\\', '/');
+        InvalidateStudioCache();
+        EmitLog(LogLevel.Ok, $"Uploaded {kind} artwork -> {relPath}");
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["localPath"] = fullPath,
+            ["relPath"] = relPath,
+            ["previewUrl"] = $"/api/studio/image?absPath={Uri.EscapeDataString(fullPath)}&v={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}"
+        };
     }
 
     private async Task<JsonObject> HandleStudioImportYdkAsync(JsonObject body)
@@ -1378,6 +1530,73 @@ public sealed partial class DesktopApiServer : IDisposable
         EmitLog(LogLevel.Ok, $"Imported .ydk -> {dest}");
         await TriggerHotReloadIfRunningAsync(Path.GetFileName(dest));
         return new JsonObject { ["ok"] = true, ["path"] = dest };
+    }
+
+    private async Task<JsonObject> HandleStudioImportYpkAsync(JsonObject body)
+    {
+        var mod = ResolveManagedMod(Str(body, "modId"));
+        var sourcePath = Str(body, "sourcePath");
+        var res = YpkImporter.ImportYpkIntoExistingMod(mod.DirectoryPath, sourcePath);
+        InvalidateStudioCache();
+        EmitLog(LogLevel.Ok, $"Merged .ypk into '{mod.Id}': {res.CardCount} cards, {res.ScriptCount} Lua, {res.ArtCount} art, {res.DeckCount} decks");
+        await TriggerHotReloadIfRunningAsync($"studio-ypk:{mod.Id}");
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["modId"] = mod.Id,
+            ["cardCount"] = res.CardCount,
+            ["scriptCount"] = res.ScriptCount,
+            ["luaLibCount"] = res.LuaLibCount,
+            ["artCount"] = res.ArtCount,
+            ["deckCount"] = res.DeckCount,
+            ["packId"] = res.PackId
+        };
+    }
+
+    private async Task<JsonObject> HandleStudioUploadYpkAsync(HttpListenerRequest req, CancellationToken ct)
+    {
+        var modId = Query(req, "modId");
+        var fileName = Path.GetFileName(Query(req, "fileName", "expansion.ypk"));
+        var mod = ResolveManagedMod(modId);
+        if (!fileName.EndsWith(".ypk", StringComparison.OrdinalIgnoreCase) &&
+            !fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ModOperationException("请拖入 .ypk 扩展卡包文件。");
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"ygo-studio-ypk-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        var tempPath = Path.Combine(tempDir, fileName);
+        try
+        {
+            await using (var fs = File.Create(tempPath))
+            {
+                await req.InputStream.CopyToAsync(fs, ct);
+            }
+
+            var res = YpkImporter.ImportYpkIntoExistingMod(mod.DirectoryPath, tempPath);
+            InvalidateStudioCache();
+            EmitLog(LogLevel.Ok, $"Dropped & merged .ypk into '{mod.Id}': {res.CardCount} cards, {res.ScriptCount} Lua, {res.ArtCount} art");
+            await TriggerHotReloadIfRunningAsync($"studio-ypk:{mod.Id}");
+            return new JsonObject
+            {
+                ["ok"] = true,
+                ["modId"] = mod.Id,
+                ["cardCount"] = res.CardCount,
+                ["scriptCount"] = res.ScriptCount,
+                ["luaLibCount"] = res.LuaLibCount,
+                ["artCount"] = res.ArtCount,
+                ["deckCount"] = res.DeckCount,
+                ["packId"] = res.PackId
+            };
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                try { Directory.Delete(tempDir, recursive: true); } catch { }
+            }
+        }
     }
 
     private async Task<JsonObject> HandleStudioSaveTrainerAsync(JsonObject body)
@@ -1400,6 +1619,151 @@ public sealed partial class DesktopApiServer : IDisposable
         EmitLog(LogLevel.Ok, $"Saved trainer.json -> {saved}");
         await TriggerHotReloadIfRunningAsync("trainer.json");
         return new JsonObject { ["ok"] = true, ["path"] = saved };
+    }
+
+    private JsonObject HandleStudioGetCampaign(HttpListenerRequest req)
+    {
+        var mod = ResolveManagedMod(Query(req, "modId"));
+        var cfgPath = Path.Combine(mod.DirectoryPath, "campaign-config.json");
+        var rmPath = Path.Combine(mod.DirectoryPath, "removals.json");
+        JsonObject cfg;
+        var exists = false;
+        if (File.Exists(cfgPath))
+        {
+            cfg = ModPatcher.ParseJson(File.ReadAllText(cfgPath, Encoding.UTF8)).AsObject();
+            exists = true;
+        }
+        else if (File.Exists(rmPath))
+        {
+            cfg = ModPatcher.ParseJson(File.ReadAllText(rmPath, Encoding.UTF8)).AsObject();
+            exists = true;
+        }
+        else
+        {
+            cfg = new JsonObject();
+        }
+
+        var removals = cfg["removals"] as JsonObject ?? cfg;
+        var campaignFiles = new JsonArray();
+        var campDir = Path.Combine(mod.DirectoryPath, "campaign");
+        if (Directory.Exists(campDir))
+        {
+            foreach (var f in Directory.GetFiles(campDir, "*", SearchOption.AllDirectories).OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+            {
+                var rel = Path.GetRelativePath(mod.DirectoryPath, f).Replace('\\', '/');
+                campaignFiles.Add((JsonNode?)JsonValue.Create(rel));
+            }
+        }
+
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["exists"] = exists,
+            ["config"] = new JsonObject
+            {
+                ["duelRules"] = cfg["duelRules"]?.GetValue<string>() ?? mod.Manifest.DuelRules ?? string.Empty,
+                ["startingGold"] = cfg["startingGold"]?.DeepClone(),
+                ["startingLp"] = cfg["startingLp"]?.DeepClone(),
+                ["bossEvery"] = cfg["bossEvery"]?.DeepClone(),
+                ["shopPackCount"] = cfg["shopPackCount"]?.DeepClone(),
+                ["rerollBasePrice"] = cfg["rerollBasePrice"]?.DeepClone(),
+                ["banishPrice"] = cfg["banishPrice"]?.DeepClone(),
+                ["disableBossCurses"] = Bool(cfg, "disableBossCurses", false),
+                ["disableShadowRelics"] = Bool(cfg, "disableShadowRelics", false),
+                ["disableRelicSeal"] = Bool(cfg, "disableRelicSeal", false),
+                ["disableRelicBanish"] = Bool(cfg, "disableRelicBanish", false),
+                ["disableRelicFusions"] = Bool(cfg, "disableRelicFusions", false),
+                ["removeCardIds"] = (removals["removeCardIds"] ?? removals["cards"])?.DeepClone() ?? new JsonArray(),
+                ["removeCharacterIndices"] = removals["removeCharacterIndices"]?.DeepClone() ?? new JsonArray(),
+                ["removeCharacterNames"] = (removals["removeCharacterNames"] ?? removals["characters"])?.DeepClone() ?? new JsonArray(),
+                ["removePackIds"] = (removals["removePackIds"] ?? removals["packs"])?.DeepClone() ?? new JsonArray(),
+                ["removeDeckIds"] = (removals["removeDeckIds"] ?? removals["decks"])?.DeepClone() ?? new JsonArray(),
+                ["removeRelicKeys"] = (removals["removeRelicKeys"] ?? removals["relics"])?.DeepClone() ?? new JsonArray(),
+                ["removeCurseKeys"] = (removals["removeCurseKeys"] ?? removals["curses"])?.DeepClone() ?? new JsonArray()
+            },
+            ["campaignFiles"] = campaignFiles
+        };
+    }
+
+    private async Task<JsonObject> HandleStudioSaveCampaignAsync(JsonObject body)
+    {
+        var mod = ResolveManagedMod(Str(body, "modId"));
+        var outObj = new JsonObject();
+
+        var duelRules = Str(body, "duelRules").Trim().ToLowerInvariant();
+        if (!string.IsNullOrWhiteSpace(duelRules)) outObj["duelRules"] = duelRules;
+        if (NullableInt(body, "startingGold") is int sg) outObj["startingGold"] = sg;
+        if (NullableInt(body, "startingLp") is int slp) outObj["startingLp"] = slp;
+        if (NullableInt(body, "bossEvery") is int be) outObj["bossEvery"] = be;
+        if (NullableInt(body, "shopPackCount") is int spc) outObj["shopPackCount"] = spc;
+        if (NullableInt(body, "rerollBasePrice") is int rbp) outObj["rerollBasePrice"] = rbp;
+        if (NullableInt(body, "banishPrice") is int bp) outObj["banishPrice"] = bp;
+
+        outObj["disableBossCurses"] = Bool(body, "disableBossCurses", false);
+        outObj["disableShadowRelics"] = Bool(body, "disableShadowRelics", false);
+        outObj["disableRelicSeal"] = Bool(body, "disableRelicSeal", false);
+        outObj["disableRelicBanish"] = Bool(body, "disableRelicBanish", false);
+        outObj["disableRelicFusions"] = Bool(body, "disableRelicFusions", false);
+
+        var removals = new JsonObject
+        {
+            ["removeCardIds"] = ParseIntJsonArray(body["removeCardIds"]),
+            ["removeCharacterIndices"] = ParseIntJsonArray(body["removeCharacterIndices"]),
+            ["removeCharacterNames"] = ParseStrJsonArray(body["removeCharacterNames"]),
+            ["removePackIds"] = ParseStrJsonArray(body["removePackIds"]),
+            ["removeDeckIds"] = ParseStrJsonArray(body["removeDeckIds"]),
+            ["removeRelicKeys"] = ParseStrJsonArray(body["removeRelicKeys"]),
+            ["removeCurseKeys"] = ParseStrJsonArray(body["removeCurseKeys"])
+        };
+        outObj["removals"] = removals;
+
+        var cfgPath = Path.Combine(mod.DirectoryPath, "campaign-config.json");
+        await File.WriteAllTextAsync(cfgPath, outObj.ToJsonString(ModPatcher.JsonOptions), ModPatcher.Utf8NoBom);
+
+        InvalidateStudioCache();
+        EmitLog(LogLevel.Ok, $"Saved campaign-config.json -> {cfgPath}");
+        await TriggerHotReloadIfRunningAsync("campaign-config.json");
+        return new JsonObject { ["ok"] = true, ["path"] = cfgPath };
+
+        static JsonArray ParseIntJsonArray(JsonNode? node)
+        {
+            var arr = new JsonArray();
+            var seen = new HashSet<int>();
+            if (node is JsonArray ja)
+            {
+                foreach (var n in ja)
+                    if (n is not null && int.TryParse(n.ToString().Trim(), out var v) && seen.Add(v)) arr.Add((JsonNode?)JsonValue.Create(v));
+            }
+            else if (node is JsonValue jv && jv.TryGetValue<string>(out var s))
+            {
+                foreach (var tok in s.Split([',', '，', ';', '\n', '\r', ' '], StringSplitOptions.RemoveEmptyEntries))
+                    if (int.TryParse(tok.Trim(), out var v) && seen.Add(v)) arr.Add((JsonNode?)JsonValue.Create(v));
+            }
+            return arr;
+        }
+
+        static JsonArray ParseStrJsonArray(JsonNode? node)
+        {
+            var arr = new JsonArray();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (node is JsonArray ja)
+            {
+                foreach (var n in ja)
+                {
+                    var s = n?.ToString().Trim();
+                    if (!string.IsNullOrEmpty(s) && seen.Add(s)) arr.Add((JsonNode?)JsonValue.Create(s));
+                }
+            }
+            else if (node is JsonValue jv && jv.TryGetValue<string>(out var s))
+            {
+                foreach (var tok in s.Split([',', '，', ';', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var t = tok.Trim();
+                    if (!string.IsNullOrEmpty(t) && seen.Add(t)) arr.Add((JsonNode?)JsonValue.Create(t));
+                }
+            }
+            return arr;
+        }
     }
 
     private async Task<JsonObject> HandleStudioScaffoldDslAsync(JsonObject body)
@@ -1826,7 +2190,8 @@ public sealed partial class DesktopApiServer : IDisposable
         {
             "image" => [("Images", ["*.png", "*.jpg", "*.jpeg", "*.webp", "*.svg"]), ("All Files", ["*.*"])],
             "ydk" => [("YGOPro Deck", ["*.ydk"]), ("All Files", ["*.*"])],
-            _ => [("MOD / YPK Archive", ["*.zip", "*.ypk"]), ("YGOPro Expansion (.ypk)", ["*.ypk"]), ("ZIP Archive", ["*.zip"]), ("All Files", ["*.*"])]
+            "ypk" => [("YGOPro / MDPro3 Expansion (.ypk)", ["*.ypk", "*.zip"]), ("All Files", ["*.*"])],
+            _ => [("MOD / YRDPK / YPK Archive", ["*.yrdpk", "*.zip", "*.ypk"]), ("YGO Rogue MOD Package (.yrdpk)", ["*.yrdpk"]), ("YGOPro Expansion (.ypk)", ["*.ypk"]), ("ZIP Archive", ["*.zip"]), ("All Files", ["*.*"])]
         };
         var picked = _pickOpenFileOnUi(Str(body, "title", "Select File"), filters);
         return new JsonObject { ["ok"] = true, ["path"] = picked };
@@ -1837,8 +2202,8 @@ public sealed partial class DesktopApiServer : IDisposable
         var defaultDir = NullIfBlank(Str(body, "initialPath"))
                          ?? Path.Combine(GetEngine().Repository.WorkspaceRoot, "dist");
         Directory.CreateDirectory(defaultDir);
-        var suggested = Str(body, "suggestedName", "mod-pack.zip");
-        var picked = _pickSaveZipOnUi(Str(body, "title", "Save ZIP"), suggested, defaultDir);
+        var suggested = Str(body, "suggestedName", "mod-pack.yrdpk");
+        var picked = _pickSaveZipOnUi(Str(body, "title", "Save MOD Package (.yrdpk / .zip)"), suggested, defaultDir);
         return new JsonObject { ["ok"] = true, ["path"] = picked };
     }
 
@@ -2031,10 +2396,14 @@ public sealed partial class DesktopApiServer : IDisposable
 
     private void EmitProgress(string status, double? percent)
     {
+        _lastProgressStatus = status;
+        _lastProgressPercent = percent;
         BroadcastSse("progress", new JsonObject
         {
             ["status"] = status,
-            ["percent"] = percent
+            ["percent"] = percent,
+            ["isDownloading"] = _activeDownloadCts is not null,
+            ["label"] = _activeDownloadLabel
         });
     }
 
@@ -2194,7 +2563,11 @@ public sealed partial class DesktopApiServer : IDisposable
                 ep("POST", "/api/restore", "一键无痕还原至纯净原版游戏", "Restore clean vanilla game"),
                 ep("POST", "/api/hotreload/start", "启动本地 HTTP/SSE MOD 热加载开发服务器与文件监听", "Start live HTTP/SSE MOD Hot-Reload server + FileSystemWatcher"),
                 ep("POST", "/api/hotreload/inject", "向桌面版游戏虚拟版本包注入热加载桥接脚本", "Inject hot-reload bridge into game virtual bundle"),
-                ep("GET", "/api/studio/catalog", "分页查询 MOD 工作台可视化图鉴（卡牌/角色/遗物/卡包/卡组/代码）", "Paginated MOD Studio gallery items (cards/characters/relics/packs/decks/code)"),
+                ep("GET", "/api/studio/catalog", "分页查询 MOD 工作台可视化图鉴（卡牌/角色/遗物/卡包/卡组/战役/代码）", "Paginated MOD Studio gallery items (cards/characters/relics/packs/decks/campaign/code)"),
+                ep("GET", "/api/studio/campaign", "读取 MOD 战役规则、原版删减与系统开关配置（campaign-config.json）", "Read MOD campaign rules, vanilla removals & system toggles (campaign-config.json)"),
+                ep("POST", "/api/studio/campaign/save", "保存 MOD 战役规则与原版内容删减配置并触发热加载", "Save MOD campaign rules & vanilla removals config and trigger hot-reload"),
+                ep("POST", "/api/export/linux-bundle", "导出 Linux / Steam Deck 零侵入虚拟版本包与一键安装脚本", "Export Linux / Steam Deck zero-touch virtual bundle + installer script"),
+                ep("POST", "/api/export/android-bundle", "导出 Android MOD 补丁包或直接修补未签名 APK（assets/web/*）", "Export Android MOD overlay ZIP or directly patch an unsigned APK (assets/web/*)"),
                 ep("GET", "/api/studio/file", "读取 MOD 目录内的任意文本 / Lua / JS / DSL 文件", "Read any text/Lua/JS/DSL file inside a MOD"),
                 ep("POST", "/api/studio/file", "保存 MOD 内文件并自动触发热加载", "Save file inside a MOD & trigger hot-reload"),
                 ep("GET", "/api/vanilla/catalog", "分页浏览本地离线原版图鉴（无限滚动）", "Paginated offline vanilla game gallery (infinite scroll)"),

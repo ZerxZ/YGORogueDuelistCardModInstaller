@@ -418,6 +418,10 @@ public sealed partial class DesktopApiServer
             });
         }
 
+        var webDelta = gameRel is not null
+            ? GitHubReleaseService.FindApplicableWebDelta(gameRel, status.InstallDir, status.GameBaseDir)
+            : null;
+
         return new JsonObject
         {
             ["ok"] = true,
@@ -428,15 +432,22 @@ public sealed partial class DesktopApiServer
             ["game"] = new JsonObject
             {
                 ["repo"] = gameRepo,
+                ["installed"] = !string.IsNullOrWhiteSpace(status.InstallDir) || !string.IsNullOrWhiteSpace(localGameVer),
                 ["localVersion"] = localGameVer,
                 ["launcherBuild"] = status.LauncherMeta?.LauncherBuild ?? 0,
                 ["latestTag"] = gameRel?.EffectiveTag,
                 ["hasUpdate"] = gameHasUpdate,
                 ["publishedAt"] = gameRel?.PublishedAt,
                 ["htmlUrl"] = gameRel?.HtmlUrl ?? $"https://github.com/{gameRepo}/releases",
+                ["body"] = gameRel?.Body ?? string.Empty,
                 ["hasWebBundle"] = gameRel is not null && GitHubReleaseService.FindWebBundleAsset(gameRel) is not null,
+                ["hasDeltaPatch"] = webDelta is not null,
+                ["deltaFromVersion"] = webDelta?.FromVersion,
+                ["deltaAsset"] = SerializeAsset(webDelta?.Asset),
                 ["webBundleAsset"] = SerializeAsset(gameRel is not null ? GitHubReleaseService.FindWebBundleAsset(gameRel) : null),
-                ["installerAsset"] = SerializeAsset(gameRel is not null ? GitHubReleaseService.FindInstallerAsset(gameRel) : null)
+                ["installerAsset"] = SerializeAsset(gameRel is not null ? GitHubReleaseService.FindInstallerAsset(gameRel) : null),
+                ["linuxAsset"] = SerializeAsset(gameRel is not null ? GitHubReleaseService.FindLinuxLauncherAsset(gameRel) : null),
+                ["androidAsset"] = SerializeAsset(gameRel is not null ? GitHubReleaseService.FindAndroidApkAsset(gameRel) : null)
             },
             ["manager"] = new JsonObject
             {
@@ -446,6 +457,7 @@ public sealed partial class DesktopApiServer
                 ["hasUpdate"] = mgrHasUpdate,
                 ["publishedAt"] = mgrRel?.PublishedAt,
                 ["htmlUrl"] = mgrRel?.HtmlUrl ?? $"https://github.com/{mgrRepo}/releases",
+                ["body"] = mgrRel?.Body ?? string.Empty,
                 ["assets"] = new JsonArray((mgrRel?.Assets ?? []).Select(a => (JsonNode?)SerializeAsset(a)).ToArray())
             }
         };
@@ -483,6 +495,7 @@ public sealed partial class DesktopApiServer
         var mode = Str(body, "mode", "web-bundle").ToLowerInvariant();
         var force = Bool(body, "force", false);
         _activeDownloadLabel = mode == "installer" ? "原版完整安装包 (.exe)" : "原版轻量数据包 (web-.zip)";
+        EmitProgress($"正在准备下载 {_activeDownloadLabel}...", 0);
 
         var interaction = new SseInstallerInteraction(EmitLog, EmitProgress);
         try
@@ -494,6 +507,7 @@ public sealed partial class DesktopApiServer
                 preferWebBundle: mode != "installer",
                 forceDownload: force);
             InvalidateCaches();
+            EmitProgress($"{_activeDownloadLabel} 完成", 100);
             return new JsonObject { ["ok"] = true, ["mode"] = mode };
         }
         finally
@@ -501,6 +515,7 @@ public sealed partial class DesktopApiServer
             _activeDownloadCts = null;
             _activeDownloadLabel = null;
             _isBusy = false;
+            EmitProgress(_lastProgressStatus ?? string.Empty, _lastProgressPercent);
         }
     }
 
@@ -511,6 +526,7 @@ public sealed partial class DesktopApiServer
         using var dlCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _activeDownloadCts = dlCts;
         _activeDownloadLabel = "MOD 管理器最新版";
+        EmitProgress("正在检查并下载最新版 MOD 管理器...", 0);
 
         var interaction = new SseInstallerInteraction(EmitLog, EmitProgress);
         try
@@ -528,6 +544,7 @@ public sealed partial class DesktopApiServer
                     ? release.Assets.FirstOrDefault(a => string.Equals(a.Name, requestedName, StringComparison.OrdinalIgnoreCase))
                     : null)
                 ?? release.Assets.FirstOrDefault(a => a.Name?.Contains("Desktop", StringComparison.OrdinalIgnoreCase) == true && a.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                ?? release.Assets.FirstOrDefault(a => a.Name?.Contains("GUI", StringComparison.OrdinalIgnoreCase) == true && a.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
                 ?? release.Assets.FirstOrDefault(a => a.Name?.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) == true)
                 ?? release.Assets.FirstOrDefault()
                 ?? throw new ModOperationException($"发布 {release.EffectiveTag} 中没有可下载的附件。");
@@ -556,6 +573,7 @@ public sealed partial class DesktopApiServer
             _activeDownloadCts = null;
             _activeDownloadLabel = null;
             _isBusy = false;
+            EmitProgress(_lastProgressStatus ?? string.Empty, _lastProgressPercent);
         }
     }
 
@@ -568,5 +586,57 @@ public sealed partial class DesktopApiServer
         }
         try { cts.Cancel(); } catch { }
         return new JsonObject { ["ok"] = true, ["cancelled"] = true };
+    }
+
+    // ==================== CROSS-PLATFORM LINUX & ANDROID MOD EXPORT ====================
+
+    private async Task<JsonObject> HandleExportLinuxBundleAsync(JsonObject body, CancellationToken ct)
+    {
+        if (_isBusy) throw new ModOperationException("已有其他构建或下载任务正在执行中。");
+        _isBusy = true;
+        var interaction = new SseInstallerInteraction(EmitLog, EmitProgress);
+        try
+        {
+            var engine = GetEngine();
+            var outputDir = NullIfBlank(Str(body, "outputDir"))
+                ?? Path.Combine(engine.Repository.WorkspaceRoot, "exports", "linux");
+            var bundleZip = await engine.ExportLinuxBundleAsync(outputDir, interaction, ct);
+            return new JsonObject
+            {
+                ["ok"] = true,
+                ["outputPath"] = bundleZip,
+                ["outputDir"] = outputDir
+            };
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+
+    private async Task<JsonObject> HandleExportAndroidBundleAsync(JsonObject body, CancellationToken ct)
+    {
+        if (_isBusy) throw new ModOperationException("已有其他构建或下载任务正在执行中。");
+        _isBusy = true;
+        var interaction = new SseInstallerInteraction(EmitLog, EmitProgress);
+        try
+        {
+            var engine = GetEngine();
+            var outputDir = NullIfBlank(Str(body, "outputDir"))
+                ?? Path.Combine(engine.Repository.WorkspaceRoot, "exports", "android");
+            var sourceApkPath = NullIfBlank(Str(body, "sourceApkPath"));
+            var outFile = await engine.ExportAndroidBundleAsync(outputDir, sourceApkPath, interaction, ct);
+            return new JsonObject
+            {
+                ["ok"] = true,
+                ["outputPath"] = outFile,
+                ["outputDir"] = outputDir,
+                ["patchedApk"] = !string.IsNullOrWhiteSpace(sourceApkPath)
+            };
+        }
+        finally
+        {
+            _isBusy = false;
+        }
     }
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Button, Card, Chip, Input, Label, ListBox, Select, Surface, TextField } from '@heroui/react';
+import { Button, Card, Chip, Input, Label, ListBox, ProgressBar, Select, Surface, TextField } from '@heroui/react';
 import {
   Activity,
   Bot,
@@ -10,8 +10,10 @@ import {
   Cpu,
   Download,
   ExternalLink,
+  FileText,
   FolderOpen,
   Globe,
+  MonitorSmartphone,
   Package,
   Pause,
   Play,
@@ -36,6 +38,10 @@ interface SettingsApiTabProps {
   status: ManagerStatus;
   t: I18nDict;
   lang: Lang;
+  initialUpdateInfo?: UpdateCheckPayload | null;
+  progressText?: string;
+  progressPct?: number | null;
+  isDownloadingLive?: boolean;
   onRefresh: () => Promise<void>;
   onOpenConsole?: () => void;
   onNotify: (msg: string, kind?: 'ok' | 'err' | 'info') => void;
@@ -55,7 +61,18 @@ function fmtBytes(bytes?: number | null): string {
   return `${bytes} B`;
 }
 
-export function SettingsApiTab({ status, t, lang, onRefresh, onOpenConsole, onNotify }: SettingsApiTabProps) {
+export function SettingsApiTab({
+  status,
+  t,
+  lang,
+  initialUpdateInfo,
+  progressText,
+  progressPct,
+  isDownloadingLive,
+  onRefresh,
+  onOpenConsole,
+  onNotify,
+}: SettingsApiTabProps) {
   const [installDir, setInstallDir] = useState(status.installDir);
   const [gameBaseDir, setGameBaseDir] = useState(status.gameBaseDir);
   const [picsDir, setPicsDir] = useState(status.picsDir);
@@ -70,8 +87,17 @@ export function SettingsApiTab({ status, t, lang, onRefresh, onOpenConsole, onNo
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [testingProxy, setTestingProxy] = useState(false);
   const [proxyTestMsg, setProxyTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [updateInfo, setUpdateInfo] = useState<UpdateCheckPayload | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<UpdateCheckPayload | null>(initialUpdateInfo ?? null);
   const [downloading, setDownloading] = useState(false);
+  const [showGameNotes, setShowGameNotes] = useState(false);
+  const [showMgrNotes, setShowMgrNotes] = useState(false);
+  const [exportingPlatform, setExportingPlatform] = useState(false);
+
+  useEffect(() => {
+    if (initialUpdateInfo && !updateInfo) {
+      setUpdateInfo(initialUpdateInfo);
+    }
+  }, [initialUpdateInfo, updateInfo]);
 
   // Vanilla DLL inspector state
   const [dllInfo, setDllInfo] = useState<VanillaDllInfo | null>(null);
@@ -242,6 +268,45 @@ export function SettingsApiTab({ status, t, lang, onRefresh, onOpenConsole, onNo
     }
   };
 
+  const handleExportLinux = async () => {
+    setExportingPlatform(true);
+    onOpenConsole?.();
+    try {
+      const res = await apiPost<{ outputPath: string; outputDir: string }>('/api/export/linux-bundle', {});
+      onNotify(`Linux MOD 包已导出：${res.outputPath}`, 'ok');
+      await apiPost('/api/shell/open-folder', { path: res.outputDir }).catch(() => {});
+    } catch (e) {
+      onNotify((e as Error).message, 'err');
+    } finally {
+      setExportingPlatform(false);
+    }
+  };
+
+  const handleExportAndroid = async (pickApk: boolean) => {
+    let sourceApkPath = '';
+    if (pickApk) {
+      const pick = await apiPost<{ path: string | null }>('/api/dialog/pick-file', {
+        title: lang === 'zh' ? '选择官方原版 YGO-Rogue-Android.apk' : 'Select official YGO-Rogue-Android.apk',
+        kind: 'all',
+      });
+      if (!pick.path) return;
+      sourceApkPath = pick.path;
+    }
+    setExportingPlatform(true);
+    onOpenConsole?.();
+    try {
+      const res = await apiPost<{ outputPath: string; outputDir: string }>('/api/export/android-bundle', {
+        sourceApkPath: sourceApkPath || undefined,
+      });
+      onNotify(`Android MOD 包已导出：${res.outputPath}`, 'ok');
+      await apiPost('/api/shell/open-folder', { path: res.outputDir }).catch(() => {});
+    } catch (e) {
+      onNotify((e as Error).message, 'err');
+    } finally {
+      setExportingPlatform(false);
+    }
+  };
+
   const handleLaunch = async () => {
     try {
       await apiPost('/api/launch');
@@ -296,6 +361,56 @@ export function SettingsApiTab({ status, t, lang, onRefresh, onOpenConsole, onNo
           </Card.Header>
 
           <Card.Content className="p-0 space-y-3">
+            {/* Prominent Live Download / Install Progress Bar */}
+            {(downloading || status.isDownloading || isDownloadingLive) && (
+              <div className="rounded-xl border border-accent/45 bg-accent/10 p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2 text-xs">
+                  <div className="flex min-w-0 items-center gap-2 font-semibold text-foreground">
+                    <Download className="size-3.5 shrink-0 animate-bounce text-accent" />
+                    <span className="truncate">
+                      {status.activeDownloadLabel || status.downloadProgress?.label || t.downloadProgressTitle}
+                    </span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Chip size="sm" color="accent" variant="primary" className="h-5">
+                      <Chip.Label className="font-mono text-[10px]">
+                        {typeof progressPct === 'number' && progressPct >= 0
+                          ? `${Math.round(progressPct)}%`
+                          : typeof status.downloadProgress?.percent === 'number'
+                            ? `${Math.round(status.downloadProgress.percent)}%`
+                            : '...'}
+                      </Chip.Label>
+                    </Chip>
+                    <Button size="sm" variant="danger-soft" onPress={handlePauseDownload} className="h-6 px-2 text-[11px]">
+                      <Pause className="size-3" />
+                      {t.pauseDownload}
+                    </Button>
+                  </div>
+                </div>
+
+                {typeof (progressPct ?? status.downloadProgress?.percent) === 'number' ? (
+                  <ProgressBar
+                    aria-label={t.downloadProgressTitle}
+                    size="md"
+                    color="accent"
+                    value={Math.max(0, Math.min(100, Number(progressPct ?? status.downloadProgress?.percent ?? 0)))}
+                  >
+                    <ProgressBar.Track className="h-2.5">
+                      <ProgressBar.Fill />
+                    </ProgressBar.Track>
+                  </ProgressBar>
+                ) : (
+                  <div className="h-2.5 w-full overflow-hidden rounded-full bg-surface-secondary">
+                    <div className="h-full w-1/3 animate-pulse rounded-full bg-accent" />
+                  </div>
+                )}
+
+                <p className="truncate font-mono text-[11px] text-foreground/85">
+                  {progressText || status.downloadProgress?.status || t.downloadConnecting}
+                </p>
+              </div>
+            )}
+
             {/* GitHub Proxy Preset + Custom Prefix + Test Latency */}
             <div className="rounded-xl border border-border/80 bg-background p-3 space-y-2.5">
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -404,9 +519,29 @@ export function SettingsApiTab({ status, t, lang, onRefresh, onOpenConsole, onNo
                   className="h-7 text-xs"
                 >
                   <Zap className="size-3.5" />
-                  {t.fastWebBundleBtn}
-                  {updateInfo?.game.webBundleAsset?.size ? ` (${fmtBytes(updateInfo.game.webBundleAsset.size)})` : ''}
+                  {updateInfo?.game.hasDeltaPatch && updateInfo.game.deltaAsset
+                    ? `${t.deltaFastTag} (${fmtBytes(updateInfo.game.deltaAsset.size)})`
+                    : `${t.fastWebBundleBtn}${updateInfo?.game.webBundleAsset?.size ? ` (${fmtBytes(updateInfo.game.webBundleAsset.size)})` : ''}`}
                 </Button>
+                {status.hasWebBundle && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    isDisabled={downloading || busy}
+                    onPress={async () => {
+                      try {
+                        await apiPost('/api/launch');
+                        await onRefresh();
+                      } catch (e) {
+                        onNotify((e as Error).message, 'err');
+                      }
+                    }}
+                    className="h-7 text-xs"
+                  >
+                    <Play className="size-3.5 text-success" />
+                    {t.standaloneLaunchWebBtn}
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="secondary"
@@ -418,6 +553,17 @@ export function SettingsApiTab({ status, t, lang, onRefresh, onOpenConsole, onNo
                   {t.fullInstallerBtn}
                   {updateInfo?.game.installerAsset?.size ? ` (${fmtBytes(updateInfo.game.installerAsset.size)})` : ''}
                 </Button>
+                {updateInfo?.game.body && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onPress={() => setShowGameNotes((v) => !v)}
+                    className="h-7 text-xs"
+                  >
+                    <FileText className="size-3.5 text-accent" />
+                    {t.viewChangelogBtn}
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="ghost"
@@ -428,6 +574,11 @@ export function SettingsApiTab({ status, t, lang, onRefresh, onOpenConsole, onNo
                   {t.openDownloadsDir}
                 </Button>
               </div>
+              {showGameNotes && updateInfo?.game.body && (
+                <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg border border-border/75 bg-surface/60 p-2.5 font-sans text-[11px] leading-relaxed text-foreground/90">
+                  {updateInfo.game.body}
+                </pre>
+              )}
             </div>
 
             {/* MOD Manager Self-Update Row */}
@@ -461,6 +612,17 @@ export function SettingsApiTab({ status, t, lang, onRefresh, onOpenConsole, onNo
                   <Download className="size-3.5 text-accent" />
                   {t.downloadManagerBtn}
                 </Button>
+                {updateInfo?.manager.body && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onPress={() => setShowMgrNotes((v) => !v)}
+                    className="h-7 text-xs"
+                  >
+                    <FileText className="size-3.5 text-accent" />
+                    {t.viewChangelogBtn}
+                  </Button>
+                )}
                 {updateInfo?.manager.htmlUrl && (
                   <Button
                     size="sm"
@@ -473,6 +635,87 @@ export function SettingsApiTab({ status, t, lang, onRefresh, onOpenConsole, onNo
                   </Button>
                 )}
               </div>
+              {showMgrNotes && updateInfo?.manager.body && (
+                <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg border border-border/75 bg-surface/60 p-2.5 font-sans text-[11px] leading-relaxed text-foreground/90">
+                  {updateInfo.manager.body}
+                </pre>
+              )}
+            </div>
+          </Card.Content>
+        </Card>
+
+        {/* 1.5 Cross-Platform Export: Linux / Steam Deck & Android */}
+        <Card variant="default" className="p-4 gap-2.5">
+          <Card.Header className="p-0">
+            <Card.Title className="flex items-center gap-2 text-xs">
+              <MonitorSmartphone className="size-4 text-accent" />
+              {t.crossPlatformTitle}
+            </Card.Title>
+            <p className="mt-0.5 text-[11px] text-muted">{t.crossPlatformHint}</p>
+          </Card.Header>
+          <Card.Content className="p-0 space-y-2.5">
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                isDisabled={exportingPlatform || busy}
+                onPress={handleExportLinux}
+                className="h-7 text-xs"
+              >
+                <Package className="size-3.5 text-success" />
+                {t.exportLinuxBtn}
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                isDisabled={exportingPlatform || busy}
+                onPress={() => handleExportAndroid(true)}
+                className="h-7 text-xs"
+              >
+                <MonitorSmartphone className="size-3.5 text-warning" />
+                {t.exportAndroidApkBtn}
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                isDisabled={exportingPlatform || busy}
+                onPress={() => handleExportAndroid(false)}
+                className="h-7 text-xs"
+              >
+                <Download className="size-3.5 text-accent" />
+                {t.exportAndroidOverlayBtn}
+              </Button>
+            </div>
+
+            <div className="rounded-lg border border-border/75 bg-background p-2.5 text-[11px] space-y-1.5">
+              <div className="text-muted">{t.androidLanHint}</div>
+              {status.hotReload.running && status.hotReload.lanUrls && status.hotReload.lanUrls.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {status.hotReload.lanUrls.map((u) => (
+                    <Button
+                      key={u}
+                      size="sm"
+                      variant="secondary"
+                      onPress={() => {
+                        navigator.clipboard.writeText(u).catch(() => {});
+                        onNotify(`已复制局域网地址：${u}`, 'ok');
+                      }}
+                      className="h-6 font-mono text-[11px]"
+                    >
+                      <Copy className="size-3 text-success" />
+                      {u}
+                    </Button>
+                  ))}
+                </div>
+              ) : (
+                <div className="font-mono text-[10.5px] text-muted">
+                  {status.hotReload.running
+                    ? `${status.hotReload.url} (${lang === 'zh' ? '仅本机回环；以管理员运行或放行端口可启用局域网访问' : 'Loopback only; allow LAN port for phone access'})`
+                    : lang === 'zh'
+                      ? '（未启动热加载 — 点击左下角「启动热加载」即可获取局域网手机试玩地址）'
+                      : '(Hot-Reload stopped — click Start Hot-Reload in the bottom-left sidebar)'}
+                </div>
+              )}
             </div>
           </Card.Content>
         </Card>

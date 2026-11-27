@@ -76,6 +76,8 @@ export interface HotReloadStatus {
   running: boolean;
   port: number;
   url: string | null;
+  lanBound?: boolean;
+  lanUrls?: string[];
   revision: number;
   lastError: string | null;
 }
@@ -88,6 +90,9 @@ export interface ManagerStatus {
   modsRoot: string;
   installDir: string;
   gameBaseDir: string;
+  hasGameExe?: boolean;
+  hasWebBundle?: boolean;
+  gameInstalled?: boolean;
   picsDir: string;
   repo: string;
   githubProxy: string;
@@ -97,6 +102,12 @@ export interface ManagerStatus {
   mcpToolCount: number;
   isDownloading: boolean;
   activeDownloadLabel: string | null;
+  downloadProgress?: {
+    active: boolean;
+    label: string | null;
+    status: string | null;
+    percent: number | null;
+  };
   activeBaseGameVersion: string | null;
   launcherBuild: number;
   mode: 'VirtualBundle' | 'LauncherManifest';
@@ -198,6 +209,7 @@ export interface StudioPackItem {
   totalCards: number;
   sourceTag: string;
   sourceFilePath: string | null;
+  artLocalPath?: string;
   imageUrl: string | null;
   subCards: SubCardThumb[];
 }
@@ -208,6 +220,7 @@ export interface StudioDeckItem {
   name: string;
   zhName: string;
   art: string;
+  artLocalPath?: string;
   cardIds: number[];
   isYdk: boolean;
   sourceTag: string;
@@ -236,7 +249,36 @@ export interface StudioTrainerState {
   inGameOverlay: boolean;
 }
 
-export type StudioCategoryKey = 'cards' | 'characters' | 'relics' | 'packs' | 'decks' | 'trainer' | 'code';
+export interface StudioCampaignConfig {
+  duelRules: string;
+  startingGold: number | null;
+  startingLp: number | null;
+  bossEvery: number | null;
+  shopPackCount: number | null;
+  rerollBasePrice: number | null;
+  banishPrice: number | null;
+  disableBossCurses: boolean;
+  disableShadowRelics: boolean;
+  disableRelicSeal: boolean;
+  disableRelicBanish: boolean;
+  disableRelicFusions: boolean;
+  removeCardIds: number[];
+  removeCharacterIndices: number[];
+  removeCharacterNames: string[];
+  removePackIds: string[];
+  removeDeckIds: string[];
+  removeRelicKeys: string[];
+  removeCurseKeys: string[];
+}
+
+export interface StudioCampaignResponse {
+  ok: boolean;
+  exists: boolean;
+  config: StudioCampaignConfig;
+  campaignFiles: string[];
+}
+
+export type StudioCategoryKey = 'cards' | 'characters' | 'relics' | 'packs' | 'decks' | 'trainer' | 'campaign' | 'code';
 
 export interface StudioCatalogResponse<T = Record<string, unknown>> {
   ok: boolean;
@@ -402,15 +444,22 @@ export interface UpdateCheckPayload {
   partialDownloads: { fileName: string; downloadedBytes: number; partPath: string }[];
   game: {
     repo: string;
+    installed?: boolean;
     localVersion: string | null;
     launcherBuild: number;
     latestTag: string | null;
     hasUpdate: boolean;
     publishedAt: string | null;
     htmlUrl: string;
+    body?: string;
     hasWebBundle: boolean;
+    hasDeltaPatch?: boolean;
+    deltaFromVersion?: string | null;
+    deltaAsset?: ReleaseAssetInfo | null;
     webBundleAsset: ReleaseAssetInfo | null;
     installerAsset: ReleaseAssetInfo | null;
+    linuxAsset?: ReleaseAssetInfo | null;
+    androidAsset?: ReleaseAssetInfo | null;
   };
   manager: {
     repo: string;
@@ -419,6 +468,7 @@ export interface UpdateCheckPayload {
     hasUpdate: boolean;
     publishedAt: string | null;
     htmlUrl: string;
+    body?: string;
     assets: ReleaseAssetInfo[];
   };
 }

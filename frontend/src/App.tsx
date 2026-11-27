@@ -14,6 +14,7 @@ import {
   toast,
 } from '@heroui/react';
 import {
+  AlertTriangle,
   BookOpen,
   Bot,
   Check,
@@ -21,7 +22,9 @@ import {
   ChevronUp,
   Code2,
   Copy,
+  Download,
   ExternalLink,
+  FileText,
   Flame,
   FolderOpen,
   FolderPlus,
@@ -34,6 +37,7 @@ import {
   Plus,
   RefreshCw,
   Settings,
+  ShieldOff,
   Sliders,
   Sparkles,
   Square,
@@ -48,6 +52,7 @@ import {
 import { buildAiPrompt } from './aiPrompts';
 import { apiGet, apiPost, subscribeEvents } from './api';
 import { ModGuideModal } from './components/ModGuideModal';
+import { OnboardingModal } from './components/OnboardingModal';
 import { TitleBar, WindowResizeHandles } from './components/WindowChrome';
 import { fmt, getDict, normalizeLang } from './i18n';
 import { LivePreviewTab } from './tabs/LivePreviewTab';
@@ -64,6 +69,7 @@ import type {
   StudioCategoryKey,
   StudioDraftFromVanilla,
   StudioSyncEvent,
+  UpdateCheckPayload,
   VanillaCategoryKey,
   WorkspaceProfile,
 } from './types';
@@ -103,6 +109,7 @@ export function App() {
     packs: 0,
     decks: 0,
     trainer: 0,
+    campaign: 0,
     code: 0,
   });
   const [vanillaCategory, setVanillaCategory] = useState<VanillaCategoryKey>('cards');
@@ -123,14 +130,25 @@ export function App() {
 
   const [busyOp, setBusyOp] = useState(false);
   const [progressText, setProgressText] = useState('');
-  const [progressPct, setProgressPct] = useState<number>(0);
+  const [progressPct, setProgressPct] = useState<number | null>(null);
+  const [isDownloadingLive, setIsDownloadingLive] = useState(false);
   const [logs, setLogs] = useState<LogLine[]>([]);
   const [mcpCalls, setMcpCalls] = useState<McpCallRecord[]>([]);
   const [mcpSyncEvent, setMcpSyncEvent] = useState<StudioSyncEvent | null>(null);
   const [copiedLogs, setCopiedLogs] = useState(false);
 
   // Modals
+  const [showOnboarding, setShowOnboarding] = useState(() => {
+    try {
+      return localStorage.getItem('ygo_mod_studio_onboarded_v1') !== '1';
+    } catch {
+      return false;
+    }
+  });
   const [showModGuide, setShowModGuide] = useState(false);
+  const [showChangelogModal, setShowChangelogModal] = useState(false);
+  const [startupUpdateInfo, setStartupUpdateInfo] = useState<UpdateCheckPayload | null>(null);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
   const [showNewMod, setShowNewMod] = useState(false);
   const [newModForm, setNewModForm] = useState({
     id: 'my-custom-mod',
@@ -175,6 +193,11 @@ export function App() {
     ]);
     setStatus(st);
     setLang(normalizeLang(st.language));
+    setIsDownloadingLive(Boolean(st.isDownloading || st.downloadProgress?.active));
+    if (st.downloadProgress?.active) {
+      if (st.downloadProgress.status) setProgressText(st.downloadProgress.status);
+      if (typeof st.downloadProgress.percent === 'number') setProgressPct(st.downloadProgress.percent);
+    }
     setWorkspaces(ws.workspaces || []);
     setActiveWsId(ws.activeId || '');
     setActiveModId((prev) => {
@@ -189,6 +212,13 @@ export function App() {
   useEffect(() => {
     refreshAll().catch((e) => notify((e as Error).message, 'err'));
 
+    // Non-blocking background update check on startup (never blocks UI or shows errors if offline)
+    const updateTimer = setTimeout(() => {
+      apiGet<UpdateCheckPayload>('/api/updates/check')
+        .then((res) => setStartupUpdateInfo(res))
+        .catch(() => {});
+    }, 1200);
+
     const unsub = subscribeEvents({
       onLog: (ev) => {
         setLogs((prev) => {
@@ -198,7 +228,10 @@ export function App() {
       },
       onProgress: (ev) => {
         setProgressText(ev.status || '');
-        if (typeof ev.percent === 'number') setProgressPct(ev.percent);
+        setProgressPct(typeof ev.percent === 'number' ? ev.percent : null);
+        if (typeof ev.isDownloading === 'boolean') {
+          setIsDownloadingLive(ev.isDownloading);
+        }
       },
       onHotReload: (ev) => {
         setStatus((prev) =>
@@ -224,7 +257,10 @@ export function App() {
       },
     });
 
-    return () => unsub();
+    return () => {
+      clearTimeout(updateTimer);
+      unsub();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -312,6 +348,23 @@ export function App() {
       await refreshAll();
     } catch (e) {
       notify((e as Error).message, 'err');
+    }
+  };
+
+  const handleQuickDownloadWebBundleAndPlay = async () => {
+    setBusyOp(true);
+    setConsoleOpen(true);
+    try {
+      await apiPost('/api/updates/download-game', { mode: 'web-bundle', force: true });
+      await refreshAll();
+      await apiPost('/api/hotreload/start');
+      await refreshAll();
+      setTab('preview');
+      notify(t.toastWebBundleDone, 'ok');
+    } catch (e) {
+      notify((e as Error).message, 'err');
+    } finally {
+      setBusyOp(false);
     }
   };
 
@@ -430,6 +483,7 @@ export function App() {
     { key: 'packs', label: t.catPacks, icon: <Package className="size-3.5" /> },
     { key: 'decks', label: t.catDecks, icon: <Layers className="size-3.5" /> },
     { key: 'trainer', label: t.catTrainer, icon: <Sliders className="size-3.5" /> },
+    { key: 'campaign', label: t.catCampaign, icon: <ShieldOff className="size-3.5" /> },
     { key: 'code', label: t.catCode, icon: <Code2 className="size-3.5" /> },
   ];
 
@@ -461,10 +515,92 @@ export function App() {
         onToggleSidebar={() => setSidebarOpen((o) => !o)}
         onToggleInspector={() => setInspectorOpen((o) => !o)}
         onToggleConsole={() => setConsoleOpen((o) => !o)}
+        onOpenOnboarding={() => setShowOnboarding(true)}
         onApply={() => handleApply(false)}
         onApplyLaunch={() => handleApply(true)}
         onRestore={handleRestore}
       />
+
+      {/* STARTUP MISSING-GAME / UPDATE-AVAILABLE NOTIFICATION STRIP */}
+      {!bannerDismissed &&
+        (!(status.gameInstalled ?? (status.installDir || status.activeBaseGameVersion)) ||
+          startupUpdateInfo?.game.hasUpdate ||
+          startupUpdateInfo?.manager.hasUpdate) && (
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-warning/35 bg-warning-soft/20 px-3 py-1.5 text-xs">
+            <div className="flex min-w-0 items-center gap-2">
+              {!(status.gameInstalled ?? (status.installDir || status.activeBaseGameVersion)) ? (
+                <>
+                  <AlertTriangle className="size-3.5 shrink-0 text-warning" />
+                  <span className="truncate font-medium text-warning">{t.gameMissingBanner}</span>
+                </>
+              ) : (
+                <>
+                  <Download className="size-3.5 shrink-0 text-accent" />
+                  <span className="truncate font-medium text-foreground">
+                    {t.updateAvailBanner}:{' '}
+                    {startupUpdateInfo?.game.hasUpdate && (
+                      <span className="font-mono text-accent">
+                        Game {startupUpdateInfo.game.latestTag}
+                        {startupUpdateInfo.game.hasDeltaPatch && startupUpdateInfo.game.deltaAsset
+                          ? ` (${t.deltaFastTag} ${(startupUpdateInfo.game.deltaAsset.size / (1024 * 1024)).toFixed(1)} MB)`
+                          : ''}
+                      </span>
+                    )}
+                    {startupUpdateInfo?.game.hasUpdate && startupUpdateInfo?.manager.hasUpdate ? ' · ' : ''}
+                    {startupUpdateInfo?.manager.hasUpdate && (
+                      <span className="font-mono text-success">
+                        MOD Studio {startupUpdateInfo.manager.latestTag}
+                      </span>
+                    )}
+                  </span>
+                </>
+              )}
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              {startupUpdateInfo && (startupUpdateInfo.game.hasUpdate || startupUpdateInfo.manager.hasUpdate) && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onPress={() => setShowChangelogModal(true)}
+                  className="h-6 px-2 text-[11px]"
+                >
+                  <FileText className="size-3 text-accent" />
+                  {t.viewChangelogBtn}
+                </Button>
+              )}
+              {!(status.gameInstalled ?? (status.installDir || status.activeBaseGameVersion)) && (
+                <Button
+                  size="sm"
+                  variant="primary"
+                  isDisabled={busyOp}
+                  onPress={handleQuickDownloadWebBundleAndPlay}
+                  className="h-6 px-2.5 text-[11px]"
+                >
+                  <Download className="size-3" />
+                  {t.standaloneWebPlayBtn}
+                </Button>
+              )}
+              <Button
+                size="sm"
+                variant={!(status.gameInstalled ?? (status.installDir || status.activeBaseGameVersion)) ? 'secondary' : 'primary'}
+                onPress={() => setTab('settings')}
+                className="h-6 px-2.5 text-[11px]"
+              >
+                {!(status.gameInstalled ?? (status.installDir || status.activeBaseGameVersion))
+                  ? t.gameMissingAction
+                  : t.tabSettings}
+              </Button>
+              <button
+                type="button"
+                aria-label="Dismiss"
+                onClick={() => setBannerDismissed(true)}
+                className="rounded p-0.5 text-muted hover:bg-surface-secondary hover:text-foreground"
+              >
+                <X className="size-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
 
       {/* IDE BODY: Left Collapsible Sidebar + Center/Right Stage */}
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
@@ -887,8 +1023,12 @@ export function App() {
               <LivePreviewTab
                 t={t}
                 hotReload={status.hotReload}
+                hasGameExe={status.hasGameExe}
+                hasWebBundle={status.hasWebBundle}
+                busy={busyOp}
                 onStartHotReload={handleStartStopHotReload}
                 onInjectHotReload={handleInjectHotReload}
+                onDownloadWebBundleAndPlay={handleQuickDownloadWebBundleAndPlay}
               />
             )}
 
@@ -911,6 +1051,10 @@ export function App() {
                 status={status}
                 t={t}
                 lang={lang}
+                initialUpdateInfo={startupUpdateInfo}
+                progressText={progressText}
+                progressPct={progressPct}
+                isDownloadingLive={isDownloadingLive}
                 onRefresh={refreshAll}
                 onOpenConsole={() => setConsoleOpen(true)}
                 onNotify={notify}
@@ -932,12 +1076,25 @@ export function App() {
                 </span>
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                {progressPct > 0 && progressPct < 100 && (
-                  <ProgressBar aria-label="Operation progress" size="sm" color="accent" value={progressPct} className="w-24">
-                    <ProgressBar.Track>
-                      <ProgressBar.Fill />
-                    </ProgressBar.Track>
-                  </ProgressBar>
+                {(isDownloadingLive || (typeof progressPct === 'number' && progressPct > 0 && progressPct < 100)) && (
+                  <div className="flex items-center gap-1.5">
+                    {typeof progressPct === 'number' ? (
+                      <>
+                        <ProgressBar aria-label="Operation progress" size="sm" color="accent" value={progressPct} className="w-28">
+                          <ProgressBar.Track>
+                            <ProgressBar.Fill />
+                          </ProgressBar.Track>
+                        </ProgressBar>
+                        <span className="font-mono text-[10px] font-semibold text-accent">
+                          {Math.round(progressPct)}%
+                        </span>
+                      </>
+                    ) : (
+                      <div className="h-1.5 w-24 overflow-hidden rounded-full bg-surface-secondary">
+                        <div className="h-full w-1/3 animate-pulse rounded-full bg-accent" />
+                      </div>
+                    )}
+                  </div>
                 )}
                 <span className="font-mono text-[10px] text-muted">{logs.length}</span>
                 {consoleOpen ? <ChevronDown className="size-3.5 text-muted" /> : <ChevronUp className="size-3.5 text-muted" />}
@@ -1239,6 +1396,128 @@ export function App() {
         }}
         onCopyAiPrompt={handleCopyAiSuperPrompt}
       />
+
+      {/* INTERACTIVE BEGINNER ONBOARDING TUTORIAL WIZARD */}
+      <OnboardingModal
+        isOpen={showOnboarding}
+        onOpenChange={setShowOnboarding}
+        status={status}
+        updateInfo={startupUpdateInfo}
+        t={t}
+        lang={lang}
+        onSelectLang={(nextLang) => {
+          setLang(nextLang);
+          apiPost('/api/settings', { language: nextLang }).catch(() => {});
+        }}
+        onRefreshStatus={refreshAll}
+        onJumpTab={(targetTab) => setTab(targetTab)}
+        onCreateExample={() => {
+          handleCreateExampleMod().catch((e) => notify((e as Error).message, 'err'));
+        }}
+        onDownloadWebBundleAndPlay={() => {
+          handleQuickDownloadWebBundleAndPlay().catch(() => {});
+        }}
+        onOpenChangelog={() => setShowChangelogModal(true)}
+        onComplete={(dontShow) => {
+          if (dontShow) {
+            try {
+              localStorage.setItem('ygo_mod_studio_onboarded_v1', '1');
+            } catch {
+              // ignore
+            }
+          }
+        }}
+      />
+
+      {/* RELEASE NOTES / CHANGELOG MODAL */}
+      <Modal.Backdrop isOpen={showChangelogModal} onOpenChange={setShowChangelogModal}>
+        <Modal.Container placement="center" size="lg">
+          <Modal.Dialog className="sm:max-w-[720px] max-h-[85vh] flex flex-col">
+            <Modal.CloseTrigger />
+            <Modal.Header>
+              <Modal.Icon className="bg-accent-soft text-accent-soft-foreground">
+                <FileText className="size-5" />
+              </Modal.Icon>
+              <Modal.Heading className="text-base">{t.changelogModalTitle}</Modal.Heading>
+            </Modal.Header>
+            <Modal.Body className="min-h-0 flex-1 overflow-y-auto space-y-3 py-3 text-xs">
+              {startupUpdateInfo?.game && (
+                <div className="rounded-xl border border-border bg-surface p-3.5 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-bold text-foreground">
+                      Yu-Gi-Oh! Rogue Duelist · {startupUpdateInfo.game.latestTag || 'Latest'}
+                    </span>
+                    <div className="flex items-center gap-2 font-mono text-[11px] text-muted">
+                      <span>
+                        {t.localVersionLabel}: {startupUpdateInfo.game.localVersion || '—'}
+                      </span>
+                      {startupUpdateInfo.game.htmlUrl && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onPress={() => apiPost('/api/shell/open-url', { url: startupUpdateInfo.game.htmlUrl })}
+                          className="h-6 px-2 text-[11px]"
+                        >
+                          <ExternalLink className="size-3" />
+                          GitHub
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-lg border border-border/75 bg-background p-3 font-sans text-[11.5px] leading-relaxed text-foreground/90">
+                    {startupUpdateInfo.game.body?.trim() || t.changelogEmpty}
+                  </pre>
+                </div>
+              )}
+
+              {startupUpdateInfo?.manager && (
+                <div className="rounded-xl border border-border bg-surface p-3.5 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-bold text-foreground">
+                      YGO MOD Studio · {startupUpdateInfo.manager.latestTag || `v${status.managerVersion}`}
+                    </span>
+                    <div className="flex items-center gap-2 font-mono text-[11px] text-muted">
+                      <span>
+                        {t.localVersionLabel}: v{status.managerVersion}
+                      </span>
+                      {startupUpdateInfo.manager.htmlUrl && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onPress={() => apiPost('/api/shell/open-url', { url: startupUpdateInfo.manager.htmlUrl })}
+                          className="h-6 px-2 text-[11px]"
+                        >
+                          <ExternalLink className="size-3" />
+                          GitHub
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-lg border border-border/75 bg-background p-3 font-sans text-[11.5px] leading-relaxed text-foreground/90">
+                    {startupUpdateInfo.manager.body?.trim() || t.changelogEmpty}
+                  </pre>
+                </div>
+              )}
+            </Modal.Body>
+            <Modal.Footer className="flex items-center justify-between gap-2">
+              <Button size="sm" variant="secondary" onPress={() => setShowChangelogModal(false)}>
+                {t.closeBtn}
+              </Button>
+              <Button
+                size="sm"
+                variant="primary"
+                onPress={() => {
+                  setShowChangelogModal(false);
+                  setTab('settings');
+                }}
+              >
+                <Download className="size-3.5" />
+                {t.tabSettings}
+              </Button>
+            </Modal.Footer>
+          </Modal.Dialog>
+        </Modal.Container>
+      </Modal.Backdrop>
     </div>
   );
 }

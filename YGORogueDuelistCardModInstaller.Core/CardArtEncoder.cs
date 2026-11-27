@@ -43,6 +43,14 @@ public static unsafe class CardArtEncoder
 
     public static string ConvertArtToBase64(string imagePath)
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            // Cross-platform (Linux / macOS / Android) Native AOT fallback:
+            // Return raw image bytes directly (supported natively by Chromium/WebKit/WebView)
+            // so Core compiles & runs with zero native GDI+ dependency outside Windows.
+            return Convert.ToBase64String(File.ReadAllBytes(imagePath));
+        }
+
         EnsureGdiPlusStarted();
 
         nint srcImage = 0;

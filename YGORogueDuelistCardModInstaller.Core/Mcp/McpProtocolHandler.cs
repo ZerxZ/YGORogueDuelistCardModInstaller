@@ -12,7 +12,7 @@ namespace YGORogueDuelistCardModInstaller.Core.Mcp;
 public static class McpProtocolHandler
 {
     public const string ServerName = "ygo-rogue-duelist-mod-mcp";
-    public const string ServerVersion = "2.0.0";
+    public static string ServerVersion => ModManager.ModManifest.CurrentManagerVersion;
     public const string DefaultProtocolVersion = "2025-03-26";
 
     /// <summary>

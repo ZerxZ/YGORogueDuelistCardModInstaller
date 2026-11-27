@@ -151,7 +151,7 @@ function isImageFileName(name: string): boolean {
 }
 
 function isArchiveFileName(name: string): boolean {
-  return /\.(zip|ypk)$/i.test(name);
+  return /\.(yrdpk|zip|ypk)$/i.test(name);
 }
 
 function summarizeModStats(m: ModEntry, t: I18nDict): string {
@@ -339,7 +339,7 @@ export function ModLibraryTab({
     runAction(async () => {
       const save = await apiPost<{ path: string | null }>('/api/dialog/save-zip', {
         title: t.packWorkspace,
-        suggestedName: `ygo-modpack-v${status.activeBaseGameVersion ?? '1.0.0'}.zip`,
+        suggestedName: `ygo-modpack-v${status.activeBaseGameVersion ?? '1.0.0'}.yrdpk`,
       });
       if (!save.path) return;
       const res = await apiPost<{ zipPath: string; modCount: number }>('/api/workspace/pack', {
@@ -353,7 +353,7 @@ export function ModLibraryTab({
     runAction(async () => {
       const save = await apiPost<{ path: string | null }>('/api/dialog/save-zip', {
         title: t.packZip,
-        suggestedName: `${mod.id}-v${mod.version}.zip`,
+        suggestedName: `${mod.id}-v${mod.version}.yrdpk`,
       });
       if (!save.path) return;
       const res = await apiPost<{ zipPath: string }>('/api/mods/pack', {
@@ -634,8 +634,8 @@ export function ModLibraryTab({
 
       {/* Center Pane */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Slim Inline Toolbar */}
-        <div className="flex h-11 shrink-0 items-center gap-1.5 overflow-x-auto border-b border-border bg-background px-3">
+        {/* Responsive Wrapping Toolbar (never clips action buttons even on narrow windows!) */}
+        <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-1.5 border-b border-border bg-background px-3 py-1.5">
           <Button size="sm" variant="primary" onPress={onOpenNewModModal} className="h-7 shrink-0 text-xs">
             <Plus className="size-3.5" />
             {t.newMod}

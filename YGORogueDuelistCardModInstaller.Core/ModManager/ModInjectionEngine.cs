@@ -292,21 +292,33 @@ public sealed partial class ModInjectionEngine
 
         if (string.IsNullOrWhiteSpace(installDir))
         {
-            if (isBuildOnly)
+            var standaloneVanilla = FindBestVanillaSource(null, gameBaseDir, null);
+            if (standaloneVanilla is null)
             {
-                throw new ModOperationException("找不到游戏安装目录（含 Yu-Gi-Oh! Rogue Duelist.dll）。");
-            }
+                if (isBuildOnly)
+                {
+                    throw new ModOperationException("找不到原版数据包 web-<版本>.zip（未安装原版游戏也未下载独立 web-*.zip）。");
+                }
 
-            var repo = string.IsNullOrWhiteSpace(state.Repo) ? InstallOptions.DefaultRepo : state.Repo;
-            installDir = await GitHubReleaseService.GetOriginalGameAsync(repo, Repository.WorkspaceRoot, interaction, cancellationToken, state.GitHubProxy);
-            state.InstallDir = installDir;
-            Repository.SaveState(state);
+                var repo = string.IsNullOrWhiteSpace(state.Repo) ? InstallOptions.DefaultRepo : state.Repo;
+                interaction.Say("未检测到原版 EXE，正在直接下载轻量数据包 web-*.zip（免装原版安装包，支持直接试玩与更新）...");
+                var rel = await GitHubReleaseService.GetLatestReleaseAsync(repo, interaction, cancellationToken, state.GitHubProxy)
+                    ?? throw new ModOperationException($"无法访问 GitHub，请在设置中启用代理加速或手动下载 web-*.zip。");
+                await GitHubReleaseService.InstallWebBundleUpdateAsync(
+                    rel,
+                    gameBaseDir,
+                    Path.Combine(Repository.WorkspaceRoot, "downloads"),
+                    state.GitHubProxy,
+                    interaction,
+                    cancellationToken,
+                    null);
+            }
         }
 
-        var dllPath = Path.Combine(installDir, GameLocator.GameDllName);
+        var dllPath = string.IsNullOrWhiteSpace(installDir) ? null : Path.Combine(installDir, GameLocator.GameDllName);
         var launcherMeta = LauncherInspector.TryReadMetadata(dllPath);
         var vanilla = FindBestVanillaSource(installDir, gameBaseDir, launcherMeta)
-            ?? throw new ModOperationException($"在 {installDir} 或 {gameBaseDir} 中找不到原版数据包 web-<版本>.zip。");
+            ?? throw new ModOperationException($"在 {installDir ?? "(无 EXE)"} 或 {gameBaseDir} 中找不到原版数据包 web-<版本>.zip。");
 
         var enabledMods = mods.Where(m => m.Enabled).OrderBy(m => m.Order).ToList();
         var developerMode = options.DeveloperModeOverride ?? state.DeveloperMode;
@@ -376,7 +388,10 @@ public sealed partial class ModInjectionEngine
         if (mode == InjectionMode.VirtualBundle)
         {
             // Ensure launcher DLL stays pristine if user previously used LauncherManifest mode
-            RestoreLauncherDllIfModified(dllPath, interaction);
+            if (!string.IsNullOrWhiteSpace(dllPath))
+            {
+                RestoreLauncherDllIfModified(dllPath, interaction);
+            }
 
             appliedVirtualVersion = ComputeVirtualVersion(vanilla.Version);
             await Task.Run(
@@ -407,6 +422,11 @@ public sealed partial class ModInjectionEngine
             if (!Directory.Exists(targetGameDir))
             {
                 throw new ModOperationException($"找不到已解包的游戏数据目录：{targetGameDir}。请先启动一次游戏或使用「零侵入虚拟版本包」模式。");
+            }
+
+            if (string.IsNullOrWhiteSpace(dllPath) || !File.Exists(dllPath))
+            {
+                throw new ModOperationException("未检测到原版启动器 DLL，无法使用「启动器清单注入」模式；请使用「零侵入虚拟版本包」或独立 web-.zip 模式。");
             }
 
             interaction.ReportProgress("正在更新启动器 DLL 哈希清单...", 90);
@@ -609,7 +629,8 @@ public sealed partial class ModInjectionEngine
 
         await EnsureGameNotRunningAsync(forceKill: false, interaction, cancellationToken);
 
-        if (string.IsNullOrWhiteSpace(installDir))
+        // Standalone Web-Bundle mode: even without original .exe installer, allow downloading/updating web-X.Y.Z.zip (and .delta.gz!)
+        if (string.IsNullOrWhiteSpace(installDir) && !preferWebBundle)
         {
             installDir = await GitHubReleaseService.GetOriginalGameAsync(repo, Repository.WorkspaceRoot, interaction, cancellationToken, proxy);
             state.InstallDir = installDir;
@@ -618,7 +639,7 @@ public sealed partial class ModInjectionEngine
             return;
         }
 
-        var dllPath = Path.Combine(installDir, GameLocator.GameDllName);
+        var dllPath = string.IsNullOrWhiteSpace(installDir) ? null : Path.Combine(installDir, GameLocator.GameDllName);
         var meta = LauncherInspector.TryReadMetadata(dllPath);
         var vanilla = FindBestVanillaSource(installDir, gameBaseDir, meta);
         var currentOfficialVersion = vanilla?.Version ?? meta?.InitialBundleVersion;
@@ -636,22 +657,28 @@ public sealed partial class ModInjectionEngine
             !string.IsNullOrWhiteSpace(currentOfficialVersion) &&
             GameLocator.CompareVersionText(latestTag, currentOfficialVersion) <= 0)
         {
-            interaction.Ok($"本机原版游戏（{currentOfficialVersion}）已是最新（GitHub 最新 {latestTag}）。");
+            interaction.Ok($"本机原版数据包（{currentOfficialVersion}）已是最新（GitHub 最新 {latestTag}）。");
             interaction.ReportProgress("已是最新版本", 100);
             return;
         }
 
         if (preferWebBundle && GitHubReleaseService.FindWebBundleAsset(release!) is not null)
         {
-            interaction.Say($"检测到版本 {latestTag}（本机原版：{currentOfficialVersion ?? "未知"}），启用极速数据包更新（web-.zip + 断点续传）...");
+            var modeDesc = string.IsNullOrWhiteSpace(installDir)
+                ? "独立 web-.zip 模式（无需原版 EXE，下载后即可直接试玩/游玩）"
+                : "极速增量/数据包更新（支持 .delta.gz 补丁 + 断点续传）";
+            interaction.Say($"检测到版本 {latestTag}（本机原版：{currentOfficialVersion ?? "未下载"}），启用 {modeDesc}...");
             await GitHubReleaseService.InstallWebBundleUpdateAsync(
                 release!,
                 gameBaseDir,
                 Path.Combine(Repository.WorkspaceRoot, "downloads"),
                 proxy,
                 interaction,
-                cancellationToken);
-            interaction.Ok($"原版数据包已更新至 {latestTag}！如需继续使用 MOD，请点击「应用注入」将全部 MOD 叠加到新版本。");
+                cancellationToken,
+                installDir);
+            interaction.Ok(string.IsNullOrWhiteSpace(installDir)
+                ? $"独立原版数据包已就绪 ({latestTag})！无需安装原版 EXE，点击「启动热加载」即可直接在内嵌试玩或浏览器开玩！"
+                : $"原版数据包已更新至 {latestTag}！如需继续使用 MOD，请点击「应用注入」将全部 MOD 叠加到新版本。");
             interaction.ReportProgress("更新完成", 100);
             return;
         }
@@ -816,6 +843,248 @@ public sealed partial class ModInjectionEngine
 
             File.WriteAllBytes(dest, bytes);
         }
+    }
+
+    /// <summary>
+    /// Exports a Linux-ready zero-touch virtual MOD bundle (.zip containing 900.x.y.zip + 900.x.y.sha256 + install-linux-mod.sh)
+    /// compatible with YGO-Rogue-Linux-x86_64 (WebKitGTK launcher reads ~/.local/share/Yu-Gi-Oh! Rogue Duelist/Game/).
+    /// </summary>
+    public async Task<string> ExportLinuxBundleAsync(
+        string outputDir,
+        IInstallerInteraction interaction,
+        CancellationToken cancellationToken = default)
+    {
+        var state = Repository.LoadState();
+        var mods = Repository.LoadMods(state);
+        var installDir = !string.IsNullOrWhiteSpace(state.InstallDir) && Directory.Exists(state.InstallDir)
+            ? state.InstallDir
+            : GameLocator.FindInstallDir();
+        var gameBaseDir = ResolveGameBaseDir(state.GameDir);
+        var picsDir = !string.IsNullOrWhiteSpace(state.PicsDir) && Directory.Exists(state.PicsDir)
+            ? state.PicsDir
+            : GameLocator.FindPicsDir();
+
+        var dllPath = string.IsNullOrWhiteSpace(installDir) ? null : Path.Combine(installDir, GameLocator.GameDllName);
+        var launcherMeta = LauncherInspector.TryReadMetadata(dllPath);
+        var vanilla = FindBestVanillaSource(installDir, gameBaseDir, launcherMeta)
+            ?? throw new ModOperationException("找不到原版 web-X.Y.Z.zip，无法导出 Linux MOD 虚拟版本包。");
+
+        var virtualVersion = ComputeVirtualVersion(vanilla.Version);
+        interaction.ReportProgress($"正在合成 Linux 虚拟版本包 ({virtualVersion})...", 20);
+        var composed = ModCompositor.Compose(vanilla.ZipPath, mods, picsDir, interaction, cancellationToken, state.DeveloperMode);
+        ValidateBundleFileAllowlist(composed.Files.Keys);
+
+        Directory.CreateDirectory(outputDir);
+        var innerZipPath = Path.Combine(outputDir, $"{virtualVersion}.zip");
+        var tempStage = Path.Combine(Path.GetTempPath(), $"ygo-linux-export-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempStage);
+            ZipFile.ExtractToDirectory(vanilla.ZipPath, tempStage, overwriteFiles: true);
+            WriteFilesToDirectory(tempStage, composed.Files);
+
+            if (File.Exists(innerZipPath)) File.Delete(innerZipPath);
+            ZipFile.CreateFromDirectory(tempStage, innerZipPath, CompressionLevel.Optimal, includeBaseDirectory: false);
+            var shaHex = ModPatcher.ComputeSha256Hex(await File.ReadAllBytesAsync(innerZipPath, cancellationToken));
+            var shaPath = Path.Combine(outputDir, $"{virtualVersion}.sha256");
+            await File.WriteAllTextAsync(shaPath, shaHex, ModPatcher.Utf8NoBom, cancellationToken);
+
+            var installSh = $$"""
+                #!/usr/bin/env bash
+                set -euo pipefail
+                VER="{{virtualVersion}}"
+                SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+                DATA_BASE="${XDG_DATA_HOME:-$HOME/.local/share}/Yu-Gi-Oh! Rogue Duelist/Game"
+                mkdir -p "$DATA_BASE"
+                echo "[YGO MOD] Installing virtual MOD bundle $VER into $DATA_BASE ..."
+                cp -f "$SCRIPT_DIR/$VER.zip" "$DATA_BASE/$VER.zip"
+                cp -f "$SCRIPT_DIR/$VER.sha256" "$DATA_BASE/$VER.sha256"
+                rm -rf "$DATA_BASE/$VER"
+                mkdir -p "$DATA_BASE/$VER"
+                unzip -qo "$DATA_BASE/$VER.zip" -d "$DATA_BASE/$VER"
+                echo "[YGO MOD] Done! Launch ygo-rogue-duelist to play with all MODs."
+                echo "[YGO MOD] To restore vanilla: rm -rf \"$DATA_BASE/$VER\" \"$DATA_BASE/$VER.zip\" \"$DATA_BASE/$VER.sha256\""
+                """;
+            var shPath = Path.Combine(outputDir, "install-linux-mod.sh");
+            await File.WriteAllTextAsync(shPath, installSh.Replace("\r\n", "\n"), ModPatcher.Utf8NoBom, cancellationToken);
+
+            var bundleZip = Path.Combine(outputDir, $"YGO-Rogue-Linux-ModBundle-{virtualVersion}.zip");
+            if (File.Exists(bundleZip)) File.Delete(bundleZip);
+            using (var archive = ZipFile.Open(bundleZip, ZipArchiveMode.Create))
+            {
+                archive.CreateEntryFromFile(innerZipPath, $"{virtualVersion}.zip", CompressionLevel.NoCompression);
+                archive.CreateEntryFromFile(shaPath, $"{virtualVersion}.sha256", CompressionLevel.Optimal);
+                archive.CreateEntryFromFile(shPath, "install-linux-mod.sh", CompressionLevel.Optimal);
+            }
+
+            TryDeleteFile(innerZipPath);
+            TryDeleteFile(shaPath);
+            TryDeleteFile(shPath);
+            interaction.ReportProgress("Linux MOD 虚拟包导出完成", 100);
+            interaction.Ok($"已导出 Linux / Steam Deck 一键安装包：{bundleZip}（解压后执行 bash install-linux-mod.sh 即可零侵入安装）");
+            return bundleZip;
+        }
+        finally
+        {
+            TryDeleteDirectory(tempStage);
+        }
+    }
+
+    /// <summary>
+    /// Exports MODs for Android:
+    /// - When sourceApkPath is supplied: patches assets/web/* directly inside the APK in pure C#, strips old META-INF signatures,
+    ///   preserving STORED compression for resources.arsc &amp; native libs, outputting an unsigned APK ready for apksigner / MT Manager.
+    /// - When sourceApkPath is omitted: exports an Android Mod Web Overlay ZIP (assets/web/* + patch-android-apk.py + instructions).
+    /// </summary>
+    public async Task<string> ExportAndroidBundleAsync(
+        string outputDir,
+        string? sourceApkPath,
+        IInstallerInteraction interaction,
+        CancellationToken cancellationToken = default)
+    {
+        var state = Repository.LoadState();
+        var mods = Repository.LoadMods(state);
+        var installDir = !string.IsNullOrWhiteSpace(state.InstallDir) && Directory.Exists(state.InstallDir)
+            ? state.InstallDir
+            : GameLocator.FindInstallDir();
+        var gameBaseDir = ResolveGameBaseDir(state.GameDir);
+        var picsDir = !string.IsNullOrWhiteSpace(state.PicsDir) && Directory.Exists(state.PicsDir)
+            ? state.PicsDir
+            : GameLocator.FindPicsDir();
+
+        var dllPath = string.IsNullOrWhiteSpace(installDir) ? null : Path.Combine(installDir, GameLocator.GameDllName);
+        var launcherMeta = LauncherInspector.TryReadMetadata(dllPath);
+        var vanilla = FindBestVanillaSource(installDir, gameBaseDir, launcherMeta)
+            ?? throw new ModOperationException("找不到原版 web-X.Y.Z.zip，无法导出 Android MOD 包。");
+
+        interaction.ReportProgress("正在合成 Android MOD 网页资源层...", 25);
+        var composed = ModCompositor.Compose(vanilla.ZipPath, mods, picsDir, interaction, cancellationToken, state.DeveloperMode);
+        ValidateBundleFileAllowlist(composed.Files.Keys);
+        Directory.CreateDirectory(outputDir);
+
+        if (!string.IsNullOrWhiteSpace(sourceApkPath) && File.Exists(sourceApkPath))
+        {
+            var outApk = Path.Combine(outputDir, $"YGO-Rogue-Android-Modded-v{vanilla.Version}-unsigned.apk");
+            if (File.Exists(outApk)) File.Delete(outApk);
+
+            interaction.ReportProgress("正在修补 Android APK (assets/web/*)...", 60);
+            var replacedSet = new HashSet<string>(StringComparer.Ordinal);
+            using (var srcZip = ZipFile.OpenRead(sourceApkPath))
+            using (var dstZip = ZipFile.Open(outApk, ZipArchiveMode.Create))
+            {
+                foreach (var entry in srcZip.Entries)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var fullName = entry.FullName;
+
+                    // Strip old v1 signature files so re-signing succeeds cleanly
+                    if (fullName.StartsWith("META-INF/", StringComparison.OrdinalIgnoreCase) &&
+                        (fullName.EndsWith(".SF", StringComparison.OrdinalIgnoreCase) ||
+                         fullName.EndsWith(".RSA", StringComparison.OrdinalIgnoreCase) ||
+                         fullName.EndsWith(".DSA", StringComparison.OrdinalIgnoreCase) ||
+                         fullName.EndsWith(".EC", StringComparison.OrdinalIgnoreCase) ||
+                         fullName.Equals("META-INF/MANIFEST.MF", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        continue;
+                    }
+
+                    if (fullName.StartsWith("assets/web/", StringComparison.Ordinal) &&
+                        composed.Files.TryGetValue(fullName["assets/web/".Length..], out var modBytes))
+                    {
+                        var newEntry = dstZip.CreateEntry(fullName, CompressionLevel.Optimal);
+                        await using var dstStream = newEntry.Open();
+                        await dstStream.WriteAsync(modBytes, cancellationToken);
+                        replacedSet.Add(fullName["assets/web/".Length..]);
+                        continue;
+                    }
+
+                    // Preserve STORED for resources.arsc & .so libraries (Android R+ requirement!)
+                    var level = fullName.Equals("resources.arsc", StringComparison.OrdinalIgnoreCase) ||
+                                fullName.EndsWith(".so", StringComparison.OrdinalIgnoreCase)
+                        ? CompressionLevel.NoCompression
+                        : CompressionLevel.Optimal;
+                    var copyEntry = dstZip.CreateEntry(fullName, level);
+                    await using var inStream = entry.Open();
+                    await using var outStream = copyEntry.Open();
+                    await inStream.CopyToAsync(outStream, cancellationToken);
+                }
+
+                // Append newly added MOD files into assets/web/
+                foreach (var (rel, bytes) in composed.Files)
+                {
+                    if (replacedSet.Contains(rel)) continue;
+                    var addEntry = dstZip.CreateEntry($"assets/web/{rel}", CompressionLevel.Optimal);
+                    await using var outStream = addEntry.Open();
+                    await outStream.WriteAsync(bytes, cancellationToken);
+                }
+            }
+
+            interaction.ReportProgress("Android Modded APK 已生成（待签名）", 100);
+            interaction.Ok($"已生成 Android MOD APK（未签名）：{outApk}。请用 uber-apk-signer / apksigner 或手机端 MT管理器 一键签名后安装！");
+            return outApk;
+        }
+
+        // Export portable Android Web Overlay ZIP + 1-click patcher script
+        var overlayZip = Path.Combine(outputDir, $"YGO-Rogue-Android-ModOverlay-v{vanilla.Version}.zip");
+        if (File.Exists(overlayZip)) File.Delete(overlayZip);
+
+        var patchScript = """
+            #!/usr/bin/env python3
+            \"\"\"Patch YGO-Rogue-Android.apk with assets/web/* from this overlay ZIP.
+            Usage: python3 patch-android-apk.py YGO-Rogue-Android.apk [output-unsigned.apk]
+            Then sign with: java -jar uber-apk-signer.jar -a output-unsigned.apk (or Android MT Manager).
+            \"\"\"
+            import sys, zipfile
+            from pathlib import Path
+
+            if len(sys.argv) < 2:
+                print("Usage: python3 patch-android-apk.py <YGO-Rogue-Android.apk> [output-unsigned.apk]")
+                sys.exit(1)
+
+            apk_in = Path(sys.argv[1])
+            apk_out = Path(sys.argv[2]) if len(sys.argv) >= 3 else apk_in.with_name(apk_in.stem + "-modded-unsigned.apk")
+            overlay_dir = Path(__file__).resolve().parent / "assets" / "web"
+            mod_files = {f"assets/web/{p.relative_to(overlay_dir).as_posix()}": p.read_bytes() for p in overlay_dir.rglob("*") if p.is_file()}
+            written = set()
+
+            with zipfile.ZipFile(apk_in, "r") as zin, zipfile.ZipFile(apk_out, "w") as zout:
+                for info in zin.infolist():
+                    name = info.filename
+                    if name.startswith("META-INF/") and name.upper().endswith((".SF", ".RSA", ".DSA", ".EC", "MANIFEST.MF")):
+                        continue
+                    if name in mod_files:
+                        zout.writestr(name, mod_files[name], compress_type=zipfile.ZIP_DEFLATED)
+                        written.add(name)
+                    else:
+                        ct = zipfile.ZIP_STORED if (name == "resources.arsc" or name.endswith(".so")) else zipfile.ZIP_DEFLATED
+                        zout.writestr(name, zin.read(name), compress_type=ct)
+                for name, data in mod_files.items():
+                    if name not in written:
+                        zout.writestr(name, data, compress_type=zipfile.ZIP_DEFLATED)
+
+            print(f"Patched {len(mod_files)} MOD files -> {apk_out}")
+            print("Next: sign with uber-apk-signer / apksigner / MT Manager and install on Android.")
+            """;
+
+        using (var archive = ZipFile.Open(overlayZip, ZipArchiveMode.Create))
+        {
+            foreach (var (rel, bytes) in composed.Files)
+            {
+                var entry = archive.CreateEntry($"assets/web/{rel}", CompressionLevel.Optimal);
+                await using var s = entry.Open();
+                await s.WriteAsync(bytes, cancellationToken);
+            }
+
+            var pyEntry = archive.CreateEntry("patch-android-apk.py", CompressionLevel.Optimal);
+            await using (var s = pyEntry.Open())
+            {
+                await s.WriteAsync(ModPatcher.GetUtf8Bytes(patchScript.Replace("\r\n", "\n")), cancellationToken);
+            }
+        }
+
+        interaction.ReportProgress("Android MOD 覆盖包导出完成", 100);
+        interaction.Ok($"已导出 Android MOD 覆盖包：{overlayZip}（含 assets/web/* 与 patch-android-apk.py；也可在下方直接选择原版 APK 一键注入生成）");
+        return overlayZip;
     }
 
     private static void TryDeleteFile(string path)

@@ -1,4 +1,4 @@
-name: Build & Release (Native AOT win-x64)
+name: Build & Release (win-x64 + linux-x64 + Android APK)
 
 on:
   push:
@@ -11,6 +11,7 @@ on:
       - "YGORogueDuelistCardModInstaller.Core/**"
       - "YGORogueDuelistCardModInstaller.Desktop/**"
       - "YGORogueDuelistCardModInstaller.Mcp/**"
+      - "android-loader/**"
       - "frontend/**"
       - "YGORogueDuelistCardModInstaller.slnx"
       - "Directory.Build.props"
@@ -69,7 +70,17 @@ jobs:
             if [[ -n "${INPUT_TAG}" ]]; then
               TAG="${INPUT_TAG}"
             else
-              TAG="v1.2.${GITHUB_RUN_NUMBER}"
+              LAST_TAG=$(git describe --tags --abbrev=0 --match "v*" 2>/dev/null || true)
+              if [[ "${LAST_TAG}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+                MAJ="${BASH_REMATCH[1]}"; MIN="${BASH_REMATCH[2]}"; PAT="${BASH_REMATCH[3]}"
+                if (( MAJ < 1 || (MAJ == 1 && MIN < 3) )); then
+                  TAG="v1.3.0"
+                else
+                  TAG="v${MAJ}.${MIN}.$((PAT + 1))"
+                fi
+              else
+                TAG="v1.3.0"
+              fi
             fi
             echo "should_release=true" >> "$GITHUB_OUTPUT"
             echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
@@ -88,6 +99,7 @@ jobs:
               YGORogueDuelistCardModInstaller.Core \
               YGORogueDuelistCardModInstaller.Desktop \
               YGORogueDuelistCardModInstaller.Mcp \
+              android-loader \
               frontend \
               YGORogueDuelistCardModInstaller.slnx \
               Directory.Build.props \
@@ -106,7 +118,16 @@ jobs:
           fi
 
           if [[ "${CHANGED}" == "yes" ]]; then
-            TAG="v1.2.${GITHUB_RUN_NUMBER}"
+            if [[ "${LAST_TAG}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              MAJ="${BASH_REMATCH[1]}"; MIN="${BASH_REMATCH[2]}"; PAT="${BASH_REMATCH[3]}"
+              if (( MAJ < 1 || (MAJ == 1 && MIN < 3) )); then
+                TAG="v1.3.0"
+              else
+                TAG="v${MAJ}.${MIN}.$((PAT + 1))"
+              fi
+            else
+              TAG="v1.3.0"
+            fi
             echo "should_release=true" >> "$GITHUB_OUTPUT"
             echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
             echo "release_version=${TAG#v}" >> "$GITHUB_OUTPUT"
@@ -117,7 +138,7 @@ jobs:
           fi
 
   build-and-publish:
-    name: Build Native AOT & Publish GitHub Release
+    name: Build Native AOT (win-x64)
     needs: detect-changes
     if: needs.detect-changes.outputs.should_release == 'true'
     runs-on: windows-latest
@@ -140,9 +161,14 @@ jobs:
 
       - name: Build React + CodeMirror 6 Frontend
         shell: pwsh
+        env:
+          RELEASE_VER: ${{ needs.detect-changes.outputs.release_version }}
         run: |
           $ErrorActionPreference = "Stop"
           Push-Location frontend
+          $pkg = Get-Content package.json -Raw -Encoding UTF8 | ConvertFrom-Json
+          $pkg.version = $env:RELEASE_VER
+          $pkg | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 package.json
           pnpm install --frozen-lockfile
           pnpm build
           Pop-Location
@@ -158,15 +184,25 @@ jobs:
           RELEASE_VER: ${{ needs.detect-changes.outputs.release_version }}
         run: |
           $ErrorActionPreference = "Stop"
+          $coreVer = ($env:RELEASE_VER -split '-')[0]
+          $asmVer = "$coreVer.0"
+          $verProps = @(
+            "-p:Version=$env:RELEASE_VER",
+            "-p:InformationalVersion=$env:RELEASE_VER",
+            "-p:AssemblyVersion=$asmVer",
+            "-p:FileVersion=$asmVer"
+          )
           dotnet publish YGORogueDuelistCardModInstaller/YGORogueDuelistCardModInstaller.csproj `
-            -c Release -r win-x64 -p:Version=$env:RELEASE_VER -o out/cli --nologo
+            -c Release -r win-x64 @verProps -o out/cli --nologo
           dotnet publish YGORogueDuelistCardModInstaller.Desktop/YGORogueDuelistCardModInstaller.Desktop.csproj `
-            -c Release -r win-x64 -p:Version=$env:RELEASE_VER -o out/gui --nologo
+            -c Release -r win-x64 @verProps -o out/gui --nologo
           dotnet publish YGORogueDuelistCardModInstaller.Mcp/YGORogueDuelistCardModInstaller.Mcp.csproj `
-            -c Release -r win-x64 -p:Version=$env:RELEASE_VER -o out/mcp --nologo
+            -c Release -r win-x64 @verProps -o out/mcp --nologo
 
       - name: Smoke Test Built Binaries
         shell: pwsh
+        env:
+          RELEASE_VER: ${{ needs.detect-changes.outputs.release_version }}
         run: |
           $ErrorActionPreference = "Stop"
           ./out/cli/YGORogueDuelistCardModInstaller.exe --help
@@ -178,6 +214,10 @@ jobs:
             Start-Sleep -Seconds 2
             $health = Invoke-RestMethod -Uri "http://127.0.0.1:17850/api/health"
             if (-not $health.ok) { throw "Desktop API health check failed" }
+            if ($health.version -ne $env:RELEASE_VER) {
+              throw "Version mismatch! Expected $($env:RELEASE_VER), got $($health.version)"
+            }
+            Write-Host "Verified Desktop runtime version: $($health.version)"
             $html = (Invoke-WebRequest -Uri "http://127.0.0.1:17850/").Content
             if (-not ($html -match '<div id="root">')) { throw "Embedded React index.html not served" }
           } finally {
@@ -228,6 +268,162 @@ jobs:
 
           Get-ChildItem release-assets | Format-Table Name, Length -AutoSize
 
+      - name: Upload Windows Release Assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-win-x64
+          path: release-assets/*.zip
+
+  build-linux-x64:
+    name: Build Native AOT (linux-x64)
+    needs: detect-changes
+    if: needs.detect-changes.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Native AOT & Photino GTK/WebKit Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          cache-dependency-path: "frontend/pnpm-lock.yaml"
+
+      - name: Build React + CodeMirror 6 Frontend
+        env:
+          RELEASE_VER: ${{ needs.detect-changes.outputs.release_version }}
+        run: |
+          cd frontend
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version=process.env.RELEASE_VER;fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n');"
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Publish Native AOT Executables (linux-x64)
+        env:
+          RELEASE_VER: ${{ needs.detect-changes.outputs.release_version }}
+        run: |
+          CORE_VER="${RELEASE_VER%%-*}"
+          ASM_VER="${CORE_VER}.0"
+          VER_PROPS="-p:Version=${RELEASE_VER} -p:InformationalVersion=${RELEASE_VER} -p:AssemblyVersion=${ASM_VER} -p:FileVersion=${ASM_VER}"
+          dotnet publish YGORogueDuelistCardModInstaller/YGORogueDuelistCardModInstaller.csproj \
+            -c Release -r linux-x64 ${VER_PROPS} -o out/cli --nologo
+          dotnet publish YGORogueDuelistCardModInstaller.Desktop/YGORogueDuelistCardModInstaller.Desktop.csproj \
+            -c Release -r linux-x64 ${VER_PROPS} -o out/gui --nologo
+          dotnet publish YGORogueDuelistCardModInstaller.Mcp/YGORogueDuelistCardModInstaller.Mcp.csproj \
+            -c Release -r linux-x64 ${VER_PROPS} -o out/mcp --nologo
+
+      - name: Smoke Test Linux Binaries
+        env:
+          RELEASE_VER: ${{ needs.detect-changes.outputs.release_version }}
+        run: |
+          chmod +x out/cli/YGORogueDuelistCardModInstaller out/gui/YGORogueDuelistCardModInstaller.Desktop out/mcp/YGORogueDuelistCardModInstaller.Mcp
+          ./out/cli/YGORogueDuelistCardModInstaller --help
+          echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | ./out/mcp/YGORogueDuelistCardModInstaller.Mcp | grep -q '"tools"'
+          ./out/gui/YGORogueDuelistCardModInstaller.Desktop --api-only &
+          GUI_PID=$!
+          sleep 2
+          HEALTH=$(curl -fsS http://127.0.0.1:17850/api/health)
+          kill $GUI_PID || true
+          echo "Linux health: $HEALTH"
+          echo "$HEALTH" | grep -q "\"version\":\"${RELEASE_VER}\""
+
+      - name: Package Linux Release Archives (.tar.gz)
+        env:
+          RELEASE_TAG: ${{ needs.detect-changes.outputs.release_tag }}
+        run: |
+          mkdir -p release-assets stage-gui stage-cli stage-mcp
+          find out -name "*.dbg" -delete || true
+          cp -r out/gui/* stage-gui/
+          cp README.md README.zh-CN.md LICENSE stage-gui/
+          tar -czf "release-assets/YGO-Rogue-ModManager-GUI-linux-x64-${RELEASE_TAG}.tar.gz" -C stage-gui .
+
+          cp -r out/cli/* stage-cli/
+          cp README.md README.zh-CN.md LICENSE stage-cli/
+          tar -czf "release-assets/YGO-Rogue-ModManager-CLI-linux-x64-${RELEASE_TAG}.tar.gz" -C stage-cli .
+
+          cp -r out/mcp/* stage-mcp/
+          cp README.md README.zh-CN.md LICENSE stage-mcp/
+          tar -czf "release-assets/YGO-Rogue-ModManager-MCP-linux-x64-${RELEASE_TAG}.tar.gz" -C stage-mcp .
+
+      - name: Upload Linux Release Assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-linux-x64
+          path: release-assets/*.tar.gz
+
+  build-android-apk:
+    name: Build Android Import-Only MOD Loader APK
+    needs: detect-changes
+    if: needs.detect-changes.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build & Sign Android MOD Loader APK (Zero-Gradle)
+        env:
+          RELEASE_VER: ${{ needs.detect-changes.outputs.release_version }}
+          RELEASE_TAG: ${{ needs.detect-changes.outputs.release_tag }}
+        run: |
+          mkdir -p release-assets
+          python3 android-loader/build_apk.py \
+            --version "${RELEASE_VER}" \
+            --out "release-assets/YGO-Rogue-ModLoader-Android-${RELEASE_TAG}.apk"
+          ls -lh release-assets/*.apk
+
+      - name: Upload Android APK Asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-android-apk
+          path: release-assets/*.apk
+
+  publish-release:
+    name: Publish Multi-Platform GitHub Release
+    needs: [detect-changes, build-and-publish, build-linux-x64, build-android-apk]
+    if: needs.detect-changes.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows Assets
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets-win-x64
+          path: release-assets
+
+      - name: Download Linux Assets
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets-linux-x64
+          path: release-assets
+
+      - name: Download Android APK Asset
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets-android-apk
+          path: release-assets
+
+      - name: Generate Combined SHA256SUMS.txt
+        run: |
+          cd release-assets
+          sha256sum *.zip *.tar.gz *.apk > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -237,4 +433,6 @@ jobs:
           make_latest: true
           files: |
             release-assets/*.zip
+            release-assets/*.tar.gz
+            release-assets/*.apk
             release-assets/SHA256SUMS.txt

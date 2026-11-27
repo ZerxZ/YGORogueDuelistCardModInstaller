@@ -40,6 +40,9 @@ public static partial class GitHubReleaseService
     [GeneratedRegex(@"^web-([0-9]+\.[0-9]+\.[0-9]+)\.zip$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex WebBundleZipRegex();
 
+    [GeneratedRegex(@"^web-([0-9]+\.[0-9]+\.[0-9]+)-to-([0-9]+\.[0-9]+\.[0-9]+)\.delta\.gz$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex WebDeltaRegex();
+
     [GeneratedRegex(@"setup|install|win", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex SetupNameRegex();
 
@@ -276,6 +279,56 @@ public static partial class GitHubReleaseService
     public static GitHubAsset? FindWebBundleAsset(GitHubRelease release) =>
         release.Assets.FirstOrDefault(a => !string.IsNullOrWhiteSpace(a.Name) && WebBundleZipRegex().IsMatch(a.Name));
 
+    public static (GitHubAsset Asset, string FromVersion, string ToVersion, string BaseZipPath)? FindApplicableWebDelta(
+        GitHubRelease release,
+        string? installDir,
+        string? gameBaseDir)
+    {
+        var deltaCandidates = new List<(GitHubAsset Asset, string FromVer, string ToVer)>();
+        foreach (var asset in release.Assets)
+        {
+            if (string.IsNullOrWhiteSpace(asset.Name) || string.IsNullOrWhiteSpace(asset.BrowserDownloadUrl)) continue;
+            var m = WebDeltaRegex().Match(asset.Name);
+            if (!m.Success) continue;
+            deltaCandidates.Add((asset, m.Groups[1].Value, m.Groups[2].Value));
+        }
+
+        if (deltaCandidates.Count == 0) return null;
+
+        // Prefer newest matching base version (smallest delta)
+        deltaCandidates.Sort((a, b) => GameLocator.CompareVersionText(b.FromVer, a.FromVer));
+
+        foreach (var (asset, fromVer, toVer) in deltaCandidates)
+        {
+            var candidates = new List<string>();
+            if (!string.IsNullOrWhiteSpace(gameBaseDir))
+                candidates.Add(Path.Combine(gameBaseDir, $"{fromVer}.zip"));
+            if (!string.IsNullOrWhiteSpace(installDir))
+                candidates.Add(Path.Combine(installDir, $"web-{fromVer}.zip"));
+
+            foreach (var baseZip in candidates)
+            {
+                if (File.Exists(baseZip))
+                {
+                    return (asset, fromVer, toVer, baseZip);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    public static GitHubAsset? FindLinuxLauncherAsset(GitHubRelease release) =>
+        release.Assets.FirstOrDefault(a =>
+            !string.IsNullOrWhiteSpace(a.Name) &&
+            a.Name.Contains("Linux", StringComparison.OrdinalIgnoreCase) &&
+            (a.Name.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase) || a.Name.EndsWith(".AppImage", StringComparison.OrdinalIgnoreCase)));
+
+    public static GitHubAsset? FindAndroidApkAsset(GitHubRelease release) =>
+        release.Assets.FirstOrDefault(a =>
+            !string.IsNullOrWhiteSpace(a.Name) &&
+            a.Name.EndsWith(".apk", StringComparison.OrdinalIgnoreCase));
+
     public static GitHubAsset? FindInstallerAsset(GitHubRelease release)
     {
         var assets = release.Assets
@@ -369,12 +422,15 @@ public static partial class GitHubReleaseService
                 if (existingBytes > 0)
                 {
                     var resumedMb = existingBytes / (1024.0 * 1024.0);
+                    var resumePct = expectedSize > 0 ? Math.Clamp(existingBytes * 100.0 / expectedSize, 0, 99) : (double?)null;
                     interaction.Say($"检测到断点缓存（已下载 {resumedMb:0.0} MB），通过「{proxyLabel}」继续断点续传 {fileName}...");
+                    interaction.ReportProgress($"正在续传 {fileName}（已缓存 {resumedMb:0.1} MB · {proxyLabel}）...", resumePct);
                 }
                 else
                 {
                     var sizeText = expectedSize > 0 ? $"（{expectedSize / (1024.0 * 1024.0):0.0} MB）" : "";
                     interaction.Say($"开始通过「{proxyLabel}」下载 {fileName}{sizeText}（支持断点续传）...");
+                    interaction.ReportProgress($"正在连接并下载 {fileName}{sizeText}（{proxyLabel}）...", 0);
                 }
             }
             else
@@ -429,23 +485,27 @@ public static partial class GitHubReleaseService
                 long writtenThisRun = 0;
                 int read;
                 var speedClock = Stopwatch.StartNew();
-                var lastReport = DateTime.UtcNow;
+                var lastReport = DateTime.MinValue;
 
                 while ((read = await srcStream.ReadAsync(buffer, cancellationToken)) > 0)
                 {
                     await dstStream.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
                     writtenThisRun += read;
 
-                    if ((DateTime.UtcNow - lastReport).TotalMilliseconds >= 220)
+                    if ((DateTime.UtcNow - lastReport).TotalMilliseconds >= 150)
                     {
                         var currentTotal = existingBytes + writtenThisRun;
                         var secs = Math.Max(0.1, speedClock.Elapsed.TotalSeconds);
-                        var mbps = (writtenThisRun / (1024.0 * 1024.0)) / secs;
+                        var bytesPerSec = writtenThisRun / secs;
+                        var mbps = bytesPerSec / (1024.0 * 1024.0);
                         if (totalBytes > 0)
                         {
                             var pct = Math.Clamp(currentTotal * 100.0 / totalBytes, 0, 100);
+                            var etaSec = bytesPerSec > 1024 ? Math.Max(0, (int)((totalBytes - currentTotal) / bytesPerSec)) : -1;
+                            var etaText = etaSec >= 60 ? $" · 剩余 {etaSec / 60}m{etaSec % 60:D2}s"
+                                : etaSec >= 0 ? $" · 剩余 {etaSec}s" : "";
                             interaction.ReportProgress(
-                                $"正在下载 {fileName} ({pct:0.0}% · {currentTotal / (1024.0 * 1024.0):0.1}/{totalBytes / (1024.0 * 1024.0):0.1} MB · {mbps:0.2} MB/s)",
+                                $"正在下载 {fileName} ({pct:0.0}% · {currentTotal / (1024.0 * 1024.0):0.1}/{totalBytes / (1024.0 * 1024.0):0.1} MB · {mbps:0.2} MB/s{etaText})",
                                 pct);
                         }
                         else
@@ -507,9 +567,10 @@ public static partial class GitHubReleaseService
     }
 
     /// <summary>
-    /// Fast vanilla data update mirroring Yu-Gi-Oh! Rogue Duelist.dll's official web-X.Y.Z.zip updater:
-    /// downloads lightweight web-&lt;ver&gt;.zip (resumable + optional proxy), verifies SHA-256, and writes
-    /// Game\&lt;ver&gt; + &lt;ver&gt;.zip + &lt;ver&gt;.sha256 without reinstalling the 240MB Inno Setup!
+    /// Fast vanilla data update mirroring Yu-Gi-Oh! Rogue Duelist's official Windows &amp; Linux updater:
+    /// 1) If a matching web-&lt;old&gt;-to-&lt;new&gt;.delta.gz (~5 MB!) exists for a local vanilla zip, downloads the tiny delta
+    ///    and applies YGODLT01 locally to reconstruct exact SHA-256-verified web-&lt;new&gt;.zip (~97% smaller!).
+    /// 2) Automatically falls back to resumable full web-&lt;new&gt;.zip download if no matching base exists or delta fails.
     /// </summary>
     public static async Task<string> InstallWebBundleUpdateAsync(
         GitHubRelease release,
@@ -517,16 +578,58 @@ public static partial class GitHubReleaseService
         string downloadDir,
         string? githubProxy,
         IInstallerInteraction interaction,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? installDir = null)
     {
         var webAsset = FindWebBundleAsset(release)
             ?? throw new ModOperationException($"该发布版本 ({release.EffectiveTag}) 不包含 web-X.Y.Z.zip 轻量更新包，请改用完整安装包更新。");
 
         var verMatch = WebBundleZipRegex().Match(webAsset.Name!);
         var version = verMatch.Success ? verMatch.Groups[1].Value : (release.EffectiveTag ?? "0.0.0").TrimStart('v', 'V');
-
         var zipDest = Path.Combine(downloadDir, webAsset.Name!);
-        var downloadedZip = await DownloadResumableAsync(
+        string? downloadedZip = null;
+
+        // 1. Try YGODLT01 Delta Patch first (~5 MB vs 228 MB full web zip!)
+        var deltaMatch = FindApplicableWebDelta(release, installDir, gameBaseDir);
+        if (deltaMatch is { } dm && dm.ToVersion.Equals(version, StringComparison.OrdinalIgnoreCase))
+        {
+            var deltaMb = dm.Asset.Size > 0 ? $"（仅 {dm.Asset.Size / (1024.0 * 1024.0):0.2} MB，免下完整包）" : "";
+            interaction.Say($"命中官方增量补丁：{dm.Asset.Name}{deltaMb}，将基于本地 v{dm.FromVersion} 无损合成 v{version}！");
+            try
+            {
+                var deltaPath = Path.Combine(downloadDir, dm.Asset.Name!);
+                await DownloadResumableAsync(
+                    dm.Asset.BrowserDownloadUrl!,
+                    deltaPath,
+                    dm.Asset.Size,
+                    dm.Asset.ExpectedSha256,
+                    githubProxy,
+                    interaction,
+                    cancellationToken);
+
+                await DeltaPatchService.ApplyDeltaAsync(
+                    dm.BaseZipPath,
+                    deltaPath,
+                    zipDest,
+                    webAsset.ExpectedSha256,
+                    interaction,
+                    cancellationToken);
+
+                interaction.Log(LogLevel.Ok, $"增量补丁合成成功！已精确重建 {webAsset.Name}（字节级一致 + SHA-256 通过）");
+                downloadedZip = zipDest;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                interaction.Warn($"增量补丁合成失败（{ex.Message}），自动回退为断点续传下载完整 {webAsset.Name}...");
+            }
+        }
+
+        // 2. Fallback to full web-X.Y.Z.zip (resumable + optional proxy)
+        downloadedZip ??= await DownloadResumableAsync(
             webAsset.BrowserDownloadUrl!,
             zipDest,
             webAsset.Size,
@@ -535,7 +638,7 @@ public static partial class GitHubReleaseService
             interaction,
             cancellationToken);
 
-        interaction.ReportProgress($"正在解包并校验原版数据包 v{version}...", 92);
+        interaction.ReportProgress($"正在解包并校验原版数据包 v{version}...", 96);
         Directory.CreateDirectory(gameBaseDir);
         var targetZip = Path.Combine(gameBaseDir, $"{version}.zip");
         var targetSha = Path.Combine(gameBaseDir, $"{version}.sha256");

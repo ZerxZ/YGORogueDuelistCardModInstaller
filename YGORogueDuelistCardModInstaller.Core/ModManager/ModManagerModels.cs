@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
@@ -26,7 +27,27 @@ public enum InjectionSyncState
 
 public sealed class ModManifest
 {
-    public const string CurrentManagerVersion = "1.0.0";
+    public static readonly string CurrentManagerVersion = ResolveCurrentManagerVersion();
+
+    private static string ResolveCurrentManagerVersion()
+    {
+        var asm = Assembly.GetEntryAssembly() ?? typeof(ModManifest).Assembly;
+        var info = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?? typeof(ModManifest).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        if (!string.IsNullOrWhiteSpace(info))
+        {
+            var cleaned = info.Split('+')[0].Trim().TrimStart('v', 'V');
+            if (!string.IsNullOrWhiteSpace(cleaned)) return cleaned;
+        }
+
+        var v = asm.GetName().Version ?? typeof(ModManifest).Assembly.GetName().Version;
+        if (v is not null && (v.Major > 0 || v.Minor > 0 || v.Build > 0))
+        {
+            return $"{v.Major}.{v.Minor}.{Math.Max(0, v.Build)}";
+        }
+
+        return "1.3.0";
+    }
 
     [JsonPropertyName("schemaVersion")]
     public int SchemaVersion { get; set; } = 1;
@@ -90,6 +111,14 @@ public sealed class ModManifest
 
     [JsonPropertyName("luaLibs")]
     public List<string>? LuaLibs { get; set; }
+
+    /// <summary>
+    /// Optional duel rules / Master Rule override for modern-era mods:
+    /// "mr1" (default DM/GX) | "mr2" (Synchro/Xyz) | "mr3" (Pendulum) | "mr4" (Link EMZ) | "mr5" (Modern MR2020: EMZ + PZone + Free FSX).
+    /// Also auto-upgraded when any enabled MOD adds Synchro/Xyz/Pendulum/Link cards.
+    /// </summary>
+    [JsonPropertyName("duelRules")]
+    public string? DuelRules { get; set; }
 
     /// <summary>
     /// Declarative in-game MOD Settings schema (rendered automatically in the F9 MOD Settings panel

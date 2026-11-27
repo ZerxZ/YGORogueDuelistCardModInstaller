@@ -32,6 +32,201 @@ public static partial class YpkImporter
         int DeckCount,
         int CdbCount);
 
+    public sealed record YpkMergeResult(
+        string ModDir,
+        int CardCount,
+        int ScriptCount,
+        int LuaLibCount,
+        int ArtCount,
+        int DeckCount,
+        int CdbCount,
+        string? PackId);
+
+    /// <summary>
+    /// Merges a YGOPro / EDOPro / MDPro3 `.ypk` expansion archive directly into an existing MOD directory
+    /// (for Visual MOD Studio import without creating a separate MOD folder).
+    /// </summary>
+    public static YpkMergeResult ImportYpkIntoExistingMod(string modDir, string ypkPath)
+    {
+        if (!Directory.Exists(modDir))
+        {
+            throw new ModOperationException($"目标 MOD 目录不存在：{modDir}");
+        }
+        if (!File.Exists(ypkPath))
+        {
+            throw new ModOperationException($"找不到要导入的 .ypk 文件：{ypkPath}");
+        }
+
+        var baseName = Path.GetFileNameWithoutExtension(ypkPath);
+        var slug = ModRepository.SanitizeId(baseName);
+        var cardsById = new Dictionary<int, YgoCardData>();
+        var textsById = new Dictionary<int, YgoCardText>();
+        var cdbCount = 0;
+        var scriptCount = 0;
+        var luaLibCount = 0;
+        var artCount = 0;
+        var deckCount = 0;
+
+        var preferredArtExtRank = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            [".webp"] = 3,
+            [".png"] = 2,
+            [".jpg"] = 1,
+            [".jpeg"] = 1
+        };
+        var writtenArtByCode = new Dictionary<string, (int Rank, bool IsThumb, string Path)>(StringComparer.OrdinalIgnoreCase);
+
+        using var zip = ZipFile.OpenRead(ypkPath);
+        foreach (var entry in zip.Entries)
+        {
+            if (entry.Length == 0 || entry.FullName.EndsWith('/') || entry.FullName.EndsWith('\\')) continue;
+            var norm = entry.FullName.Replace('\\', '/').TrimStart('/');
+            var fileName = Path.GetFileName(norm);
+            if (string.IsNullOrWhiteSpace(fileName)) continue;
+
+            if (fileName.EndsWith(".cdb", StringComparison.OrdinalIgnoreCase))
+            {
+                using var ms = new MemoryStream();
+                using (var es = entry.Open()) es.CopyTo(ms);
+                if (TryReadYgoCdb(ms.ToArray(), cardsById, textsById)) cdbCount++;
+                continue;
+            }
+
+            if (fileName.EndsWith(".lua", StringComparison.OrdinalIgnoreCase))
+            {
+                var cardMatch = CardLuaRegex().Match(fileName);
+                if (cardMatch.Success)
+                {
+                    var targetDir = Path.Combine(modDir, "lua", "cards");
+                    Directory.CreateDirectory(targetDir);
+                    ExtractEntryNormalizedUtf8(entry, Path.Combine(targetDir, $"c{cardMatch.Groups[1].Value}.lua"));
+                    scriptCount++;
+                }
+                else if (!fileName.Equals("constant.lua", StringComparison.OrdinalIgnoreCase) &&
+                         !fileName.Equals("utility.lua", StringComparison.OrdinalIgnoreCase) &&
+                         !fileName.Equals("archetype_setcode_constants.lua", StringComparison.OrdinalIgnoreCase))
+                {
+                    var targetDir = Path.Combine(modDir, "lua", "lib");
+                    Directory.CreateDirectory(targetDir);
+                    ExtractEntryNormalizedUtf8(entry, Path.Combine(targetDir, fileName));
+                    luaLibCount++;
+                }
+                continue;
+            }
+
+            var ext = Path.GetExtension(fileName);
+            if (preferredArtExtRank.TryGetValue(ext, out var extRank))
+            {
+                var artMatch = CardArtRegex().Match(fileName);
+                if (artMatch.Success && !norm.Contains("/field/", StringComparison.OrdinalIgnoreCase))
+                {
+                    var code = artMatch.Groups[1].Value;
+                    var isThumb = norm.Contains("/thumbnail/", StringComparison.OrdinalIgnoreCase);
+                    if (writtenArtByCode.TryGetValue(code, out var prev))
+                    {
+                        if (!prev.IsThumb && isThumb) continue;
+                        if (prev.IsThumb == isThumb && prev.Rank >= extRank) continue;
+                        if (File.Exists(prev.Path))
+                        {
+                            try { File.Delete(prev.Path); } catch { }
+                        }
+                    }
+                    else
+                    {
+                        artCount++;
+                    }
+
+                    var artDir = Path.Combine(modDir, "art");
+                    Directory.CreateDirectory(artDir);
+                    var outPath = Path.Combine(artDir, $"{code}{ext.ToLowerInvariant()}");
+                    using var es = entry.Open();
+                    using var fs = File.Create(outPath);
+                    es.CopyTo(fs);
+                    writtenArtByCode[code] = (extRank, isThumb, outPath);
+                }
+                continue;
+            }
+
+            if (fileName.EndsWith(".ydk", StringComparison.OrdinalIgnoreCase))
+            {
+                var decksDir = Path.Combine(modDir, "decks");
+                Directory.CreateDirectory(decksDir);
+                ExtractEntryNormalizedUtf8(entry, Path.Combine(decksDir, fileName));
+                deckCount++;
+            }
+        }
+
+        if (cardsById.Count == 0 && scriptCount == 0 && artCount == 0 && deckCount == 0)
+        {
+            throw new ModOperationException($"所选 .ypk 压缩包中未检测到有效的 .cdb 数据库、Lua 卡牌脚本、卡图或 .ydk 卡组：{Path.GetFileName(ypkPath)}");
+        }
+
+        string? packId = null;
+        if (cardsById.Count > 0)
+        {
+            var cardsDir = Path.Combine(modDir, "cards");
+            Directory.CreateDirectory(cardsDir);
+            var targetCardsFile = Path.Combine(cardsDir, $"ypk-{slug}.json");
+
+            var mergedById = new Dictionary<int, JsonObject>();
+            if (File.Exists(targetCardsFile))
+            {
+                try
+                {
+                    if (ModPatcher.ParseJson(File.ReadAllText(targetCardsFile, Encoding.UTF8)) is JsonArray existingArr)
+                    {
+                        foreach (var item in existingArr.OfType<JsonObject>())
+                        {
+                            if (item["id"] is JsonValue v && v.TryGetValue<int>(out var eid) && eid > 0)
+                            {
+                                mergedById[eid] = item;
+                            }
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            var importedIds = new List<int>();
+            foreach (var kv in cardsById.OrderBy(k => k.Key))
+            {
+                textsById.TryGetValue(kv.Key, out var txt);
+                mergedById[kv.Key] = BuildDeclarativeCardJson(kv.Value, txt);
+                importedIds.Add(kv.Key);
+            }
+
+            var outArr = new JsonArray();
+            foreach (var kv in mergedById.OrderBy(k => k.Key))
+            {
+                outArr.Add((JsonNode?)kv.Value.DeepClone());
+            }
+            File.WriteAllText(targetCardsFile, outArr.ToJsonString(ModPatcher.JsonOptions), ModPatcher.Utf8NoBom);
+
+            var packsDir = Path.Combine(modDir, "packs");
+            Directory.CreateDirectory(packsDir);
+            packId = $"YPK-{slug.ToUpperInvariant()}";
+            var packCode = slug.Length >= 3 ? slug[..3].ToUpperInvariant() : "YPK";
+            var packObj = new JsonObject
+            {
+                ["id"] = packId,
+                ["name"] = $"{baseName} (YPK Pack)",
+                ["zhName"] = $"{baseName} 扩展卡包",
+                ["region"] = "EN",
+                ["code"] = packCode,
+                ["date"] = DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                ["image"] = string.Empty,
+                ["size"] = 9,
+                ["common"] = new JsonArray(importedIds.Select(i => (JsonNode?)JsonValue.Create(i)).ToArray()),
+                ["rare"] = new JsonArray(),
+                ["super"] = new JsonArray(),
+                ["ultra"] = new JsonArray()
+            };
+            File.WriteAllText(Path.Combine(packsDir, $"ypk-{slug}-pack.json"), packObj.ToJsonString(ModPatcher.JsonOptions), ModPatcher.Utf8NoBom);
+        }
+
+        return new YpkMergeResult(modDir, cardsById.Count, scriptCount, luaLibCount, artCount, deckCount, cdbCount, packId);
+    }
+
     public static bool IsYpkArchive(string archivePath)
     {
         if (string.IsNullOrWhiteSpace(archivePath) || !File.Exists(archivePath)) return false;

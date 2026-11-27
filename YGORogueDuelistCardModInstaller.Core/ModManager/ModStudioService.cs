@@ -19,8 +19,13 @@ public static class ModStudioService
     [
         new("Effect Monster / 效果怪兽", "Effect Monster", 33, true, "Spellcaster"),
         new("Normal Monster / 通常怪兽", "Normal Monster", 17, true, "Dragon"),
+        new("Tuner Effect Monster / 调整效果怪兽", "Tuner Monster", 4129, true, "Warrior"),
         new("Fusion Effect Monster / 融合效果怪兽", "Fusion Effect Monster", 97, true, "Spellcaster"),
         new("Ritual Effect Monster / 仪式效果怪兽", "Ritual Effect Monster", 161, true, "Warrior"),
+        new("Synchro Effect Monster / 同调效果怪兽 (5D's)", "Synchro Monster", 8225, true, "Dragon"),
+        new("Xyz Effect Monster / 超量效果怪兽 (ZEXAL)", "Xyz Monster", 8388641, true, "Warrior"),
+        new("Pendulum Effect Monster / 灵摆效果怪兽 (ARC-V)", "Pendulum Effect Monster", 16777249, true, "Spellcaster"),
+        new("Link Effect Monster / 连接效果怪兽 (VRAINS)", "Link Monster", 67108897, true, "Cyberse"),
         new("Normal Spell / 通常魔法", "Spell Card", 2, false, "Normal"),
         new("Quick-Play Spell / 速攻魔法", "Spell Card", 65538, false, "Quick-Play"),
         new("Continuous Spell / 永续魔法", "Spell Card", 131074, false, "Continuous"),
@@ -66,7 +71,10 @@ public static class ModStudioService
         ["Sea Serpent"] = "262144",
         ["Reptile"] = "524288",
         ["Psychic"] = "1048576",
-        ["Divine-Beast"] = "2097152"
+        ["Divine-Beast"] = "2097152",
+        ["Wyrm"] = "8388608",
+        ["Cyberse"] = "16777216",
+        ["Illusion"] = "33554432"
     };
 
     public static int SuggestNextCardId(string modDir)
@@ -213,6 +221,93 @@ public static class ModStudioService
                     Duel.Draw(tp,1,REASON_EFFECT)
                 end
                 """,
+            "synchro_monster" => $$"""
+                -- {{cardName}} (c{{cardId}}.lua) - Synchro Monster (proc_synchro.lua)
+                local s,id,o=GetID()
+                function s.initial_effect(c)
+                    -- 1 Tuner + 1+ non-Tuner monsters
+                    Synchro.AddProcedure(c,nil,1,1,Synchro.NonTuner(nil),1,99)
+                    c:EnableReviveLimit()
+                    -- On Synchro Summon: draw 1 card
+                    local e1=Effect.CreateEffect(c)
+                    e1:SetDescription(aux.Stringid(id,0))
+                    e1:SetCategory(CATEGORY_DRAW)
+                    e1:SetType(EFFECT_TYPE_SINGLE+EFFECT_TYPE_TRIGGER_O)
+                    e1:SetProperty(EFFECT_FLAG_DELAY)
+                    e1:SetCode(EVENT_SPSUMMON_SUCCESS)
+                    e1:SetCondition(function(e) return e:GetHandler():IsSummonType(SUMMON_TYPE_SYNCHRO) end)
+                    e1:SetTarget(function(e,tp,eg,ep,ev,re,r,rp,chk)
+                        if chk==0 then return Duel.IsPlayerCanDraw(tp,1) end
+                        Duel.SetOperationInfo(0,CATEGORY_DRAW,nil,0,tp,1)
+                    end)
+                    e1:SetOperation(function(e,tp) Duel.Draw(tp,1,REASON_EFFECT) end)
+                    c:RegisterEffect(e1)
+                end
+                """,
+            "xyz_monster" => $$"""
+                -- {{cardName}} (c{{cardId}}.lua) - Xyz Monster (proc_xyz.lua)
+                local s,id,o=GetID()
+                function s.initial_effect(c)
+                    -- 2 Level 4 monsters
+                    Xyz.AddProcedure(c,nil,4,2)
+                    c:EnableReviveLimit()
+                    -- Once per turn: detach 1 material; destroy 1 monster opponent controls
+                    local e1=Effect.CreateEffect(c)
+                    e1:SetDescription(aux.Stringid(id,0))
+                    e1:SetCategory(CATEGORY_DESTROY)
+                    e1:SetType(EFFECT_TYPE_IGNITION)
+                    e1:SetRange(LOCATION_MZONE)
+                    e1:SetCountLimit(1)
+                    e1:SetCost(Cost.DetachFromSelf(1))
+                    e1:SetTarget(function(e,tp,eg,ep,ev,re,r,rp,chk)
+                        if chk==0 then return Duel.IsExistingMatchingCard(aux.TRUE,tp,0,LOCATION_MZONE,1,nil) end
+                        Duel.SetOperationInfo(0,CATEGORY_DESTROY,nil,1,1-tp,LOCATION_MZONE)
+                    end)
+                    e1:SetOperation(function(e,tp)
+                        Duel.Hint(HINT_SELECTMSG,tp,HINTMSG_DESTROY)
+                        local g=Duel.SelectMatchingCard(tp,aux.TRUE,tp,0,LOCATION_MZONE,1,1,nil)
+                        if #g>0 then Duel.Destroy(g,REASON_EFFECT) end
+                    end)
+                    c:RegisterEffect(e1)
+                end
+                """,
+            "pendulum_monster" => $$"""
+                -- {{cardName}} (c{{cardId}}.lua) - Pendulum Monster (proc_pendulum.lua, requires MR3/MR5)
+                local s,id,o=GetID()
+                function s.initial_effect(c)
+                    Pendulum.AddProcedure(c)
+                    -- Pendulum Effect: monsters you control gain 300 ATK
+                    local e1=Effect.CreateEffect(c)
+                    e1:SetType(EFFECT_TYPE_FIELD)
+                    e1:SetCode(EFFECT_UPDATE_ATTACK)
+                    e1:SetRange(LOCATION_PZONE)
+                    e1:SetTargetRange(LOCATION_MZONE,0)
+                    e1:SetValue(300)
+                    c:RegisterEffect(e1)
+                end
+                """,
+            "link_monster" => $$"""
+                -- {{cardName}} (c{{cardId}}.lua) - Link Monster (proc_link.lua, requires MR4/MR5)
+                local s,id,o=GetID()
+                function s.initial_effect(c)
+                    -- 2 Effect Monsters (set data.link_marker e.g. 0x5 = Bottom-Left + Bottom-Right, level = Link Rating 2)
+                    Link.AddProcedure(c,aux.FilterBoolFunctionEx(Card.IsType,TYPE_EFFECT),2,2)
+                    c:EnableReviveLimit()
+                    local e1=Effect.CreateEffect(c)
+                    e1:SetDescription(aux.Stringid(id,0))
+                    e1:SetCategory(CATEGORY_DRAW)
+                    e1:SetType(EFFECT_TYPE_SINGLE+EFFECT_TYPE_TRIGGER_O)
+                    e1:SetProperty(EFFECT_FLAG_DELAY)
+                    e1:SetCode(EVENT_SPSUMMON_SUCCESS)
+                    e1:SetCondition(function(e) return e:GetHandler():IsSummonType(SUMMON_TYPE_LINK) end)
+                    e1:SetTarget(function(e,tp,eg,ep,ev,re,r,rp,chk)
+                        if chk==0 then return Duel.IsPlayerCanDraw(tp,1) end
+                        Duel.SetOperationInfo(0,CATEGORY_DRAW,nil,0,tp,1)
+                    end)
+                    e1:SetOperation(function(e,tp) Duel.Draw(tp,1,REASON_EFFECT) end)
+                    c:RegisterEffect(e1)
+                end
+                """,
             _ => $$"""
                 -- {{cardName}} (c{{cardId}}.lua)
                 local s,id=GetID()
@@ -330,10 +425,30 @@ public static class ModStudioService
         var deckCards = SplitNames(deckCardNamesText);
         var packs = SplitNames(startingPacksCsv);
 
+        var spriteVal = string.IsNullOrWhiteSpace(sprite) ? "dm01.png" : sprite.Trim();
+        if (File.Exists(spriteVal))
+        {
+            var ext = Path.GetExtension(spriteVal).ToLowerInvariant();
+            if (ext is not (".png" or ".jpg" or ".jpeg" or ".webp")) ext = ".png";
+            var charArtDir = Path.Combine(modDir, "art", "characters");
+            Directory.CreateDirectory(charArtDir);
+            var destName = $"{slug}{ext}";
+            var destPath = Path.Combine(charArtDir, destName);
+            if (!string.Equals(Path.GetFullPath(spriteVal), Path.GetFullPath(destPath), StringComparison.OrdinalIgnoreCase))
+            {
+                File.Copy(spriteVal, destPath, overwrite: true);
+            }
+            spriteVal = $"characters/{destName}";
+        }
+        else if (spriteVal.StartsWith("art/", StringComparison.OrdinalIgnoreCase))
+        {
+            spriteVal = spriteVal[4..];
+        }
+
         var obj = new JsonObject
         {
             ["name"] = name.Trim(),
-            ["sprite"] = string.IsNullOrWhiteSpace(sprite) ? "dm01.png" : sprite.Trim(),
+            ["sprite"] = spriteVal,
             ["race"] = string.IsNullOrWhiteSpace(race) ? "Spellcaster" : race.Trim(),
             ["attribute"] = string.IsNullOrWhiteSpace(attribute) ? "DARK" : attribute.Trim().ToUpperInvariant(),
             ["color"] = string.IsNullOrWhiteSpace(color) ? "#f4cf57" : color.Trim(),
@@ -421,10 +536,35 @@ public static class ModStudioService
         string commonIdsText,
         string rareIdsText,
         string superIdsText,
-        string ultraIdsText)
+        string ultraIdsText,
+        string? coverSourcePath = null)
     {
         if (string.IsNullOrWhiteSpace(packId)) throw new ModOperationException("请输入卡包 ID（如 EN-MYPACK）。");
         var id = packId.Trim();
+        var coverRel = string.Empty;
+        if (!string.IsNullOrWhiteSpace(coverSourcePath))
+        {
+            var trimmed = coverSourcePath.Trim();
+            if (File.Exists(trimmed))
+            {
+                var ext = Path.GetExtension(trimmed).ToLowerInvariant();
+                if (ext is not (".jpg" or ".jpeg" or ".png" or ".webp")) ext = ".jpg";
+                var packArtDir = Path.Combine(modDir, "art", "packs");
+                Directory.CreateDirectory(packArtDir);
+                var destName = $"{id}{ext}";
+                var destPath = Path.Combine(packArtDir, destName);
+                if (!string.Equals(Path.GetFullPath(trimmed), Path.GetFullPath(destPath), StringComparison.OrdinalIgnoreCase))
+                {
+                    File.Copy(trimmed, destPath, overwrite: true);
+                }
+                coverRel = $"art/packs/{destName}";
+            }
+            else
+            {
+                coverRel = trimmed.Replace('\\', '/');
+            }
+        }
+
         var obj = new JsonObject
         {
             ["id"] = id,
@@ -440,6 +580,7 @@ public static class ModStudioService
             ["ultra"] = ParseIdJsonArray(ultraIdsText)
         };
         if (!string.IsNullOrWhiteSpace(zhName)) obj["zhName"] = zhName.Trim();
+        if (!string.IsNullOrWhiteSpace(coverRel)) obj["cover"] = coverRel;
 
         var dir = Path.Combine(modDir, "packs");
         Directory.CreateDirectory(dir);
@@ -454,22 +595,49 @@ public static class ModStudioService
         string name,
         string? zhName,
         string artCode,
-        string cardIdsText)
+        string cardIdsText,
+        string? coverSourcePath = null)
     {
         if (string.IsNullOrWhiteSpace(deckId)) throw new ModOperationException("请输入预组卡组 ID（如 MY-STARTER）。");
         var cards = ParseIdJsonArray(cardIdsText);
         if (cards.Count == 0) throw new ModOperationException("请至少填入 1 个有效卡牌数字 ID。");
 
         var id = deckId.Trim();
+        var effectiveArt = string.IsNullOrWhiteSpace(artCode) ? id : artCode.Trim();
+        var coverRel = string.Empty;
+        if (!string.IsNullOrWhiteSpace(coverSourcePath))
+        {
+            var trimmed = coverSourcePath.Trim();
+            if (File.Exists(trimmed))
+            {
+                var ext = Path.GetExtension(trimmed).ToLowerInvariant();
+                if (ext is not (".jpg" or ".jpeg" or ".png" or ".webp")) ext = ".jpg";
+                var deckArtDir = Path.Combine(modDir, "art", "decks");
+                Directory.CreateDirectory(deckArtDir);
+                var destName = $"{effectiveArt}{ext}";
+                var destPath = Path.Combine(deckArtDir, destName);
+                if (!string.Equals(Path.GetFullPath(trimmed), Path.GetFullPath(destPath), StringComparison.OrdinalIgnoreCase))
+                {
+                    File.Copy(trimmed, destPath, overwrite: true);
+                }
+                coverRel = $"art/decks/{destName}";
+            }
+            else
+            {
+                coverRel = trimmed.Replace('\\', '/');
+            }
+        }
+
         var obj = new JsonObject
         {
             ["id"] = id,
             ["name"] = string.IsNullOrWhiteSpace(name) ? id : name.Trim(),
             ["date"] = DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-            ["art"] = string.IsNullOrWhiteSpace(artCode) ? "SDK" : artCode.Trim(),
+            ["art"] = effectiveArt,
             ["cards"] = cards
         };
         if (!string.IsNullOrWhiteSpace(zhName)) obj["zhName"] = zhName.Trim();
+        if (!string.IsNullOrWhiteSpace(coverRel)) obj["cover"] = coverRel;
 
         var dir = Path.Combine(modDir, "preconstructed");
         Directory.CreateDirectory(dir);

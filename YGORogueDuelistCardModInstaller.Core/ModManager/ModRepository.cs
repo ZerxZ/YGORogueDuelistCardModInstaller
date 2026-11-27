@@ -249,7 +249,7 @@ public sealed partial class ModRepository
                 return YpkImporter.ImportYpk(this, fullSource, overwrite).Mod;
             }
 
-            if (File.Exists(fullSource) && fullSource.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+            if (File.Exists(fullSource) && ModPackager.IsModArchiveExtension(fullSource))
             {
                 tempDir = Path.Combine(Path.GetTempPath(), "ygo-mod-import-" + Guid.NewGuid().ToString("N"));
                 Directory.CreateDirectory(tempDir);
@@ -793,7 +793,7 @@ public sealed partial class ModRepository
             """;
         File.WriteAllText(Path.Combine(dir, "characters", "showcase-duelist.json"), characterJson, ModPatcher.Utf8NoBom);
 
-        // 8. Booster Pack & Preconstructed Deck
+        // 8. Booster Pack & Preconstructed Deck (minimum 9 distinct cards required by campaign_expansion.open_pack)
         const string packJson = """
             {
               "id": "EN-CHRONO",
@@ -804,10 +804,10 @@ public sealed partial class ModRepository
               "date": "2026-01-01",
               "image": "",
               "size": 9,
-              "common": [190088001, 190088002, 46986414, 38033121],
-              "rare": [190088002],
-              "super": [190088001],
-              "ultra": [46986414]
+              "common": [190088001, 190088002, 46986414, 38033121, 55144522, 5318639, 83764718, 44095762, 40640057, 70781052],
+              "rare": [190088002, 38033121, 12580477],
+              "super": [190088001, 89631139],
+              "ultra": [46986414, 74677422]
             }
             """;
         File.WriteAllText(Path.Combine(dir, "packs", "showcase-pack.json"), packJson, ModPatcher.Utf8NoBom);

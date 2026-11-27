@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<title>YGO Rogue MOD Loader</title>
+<style>
+  :root {
+    --bg: #0b0d12; --surface: #141822; --surface2: #1c2230; --border: #262e40;
+    --fg: #f1f5f9; --muted: #94a3b8; --accent: #38bdf8; --ok: #22c55e; --warn: #f59e0b; --err: #ef4444;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--fg); padding-bottom: 88px; }
+  header { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px; background: rgba(11,13,18,0.92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--border); }
+  .brand { font-weight: 700; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  .pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(56,189,248,0.15); color: var(--accent); font-family: monospace; }
+  .btn { border: 1px solid var(--border); background: var(--surface2); color: var(--fg); border-radius: 10px;
+    padding: 9px 13px; font-size: 13px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+  .btn:active { opacity: 0.78; transform: scale(0.98); }
+  .btn-primary { background: var(--accent); border-color: var(--accent); color: #06131c; }
+  .btn-ok { background: var(--ok); border-color: var(--ok); color: #052010; }
+  .btn-warn { background: rgba(245,158,11,0.16); border-color: rgba(245,158,11,0.45); color: var(--warn); }
+  .btn-err { background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.35); color: var(--err); }
+  .btn-sm { padding: 5px 9px; font-size: 12px; border-radius: 8px; }
+  main { padding: 14px; display: flex; flex-direction: column; gap: 14px; max-width: 680px; margin: 0 auto; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .card-title { font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .muted { font-size: 12px; color: var(--muted); line-height: 1.45; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  select, input[type=text] { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px; font-size: 12px; flex: 1; min-width: 140px; }
+  .mod-item { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; display: flex; align-items: center; gap: 10px; }
+  .mod-info { flex: 1; min-width: 0; }
+  .mod-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mod-meta { font-size: 11px; color: var(--muted); margin-top: 2px; font-family: monospace; }
+  .tag { font-size: 10px; padding: 1px 6px; border-radius: 6px; background: var(--surface2); color: var(--accent); margin-right: 4px; text-transform: uppercase; }
+  .progress-box { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: none; }
+  .bar-bg { height: 6px; background: var(--bg); border-radius: 99px; overflow: hidden; margin-top: 6px; }
+  .bar-fill { height: 100%; background: var(--accent); width: 0%; transition: width .2s; }
+  .toast { position: fixed; left: 14px; right: 14px; bottom: 86px; z-index: 30; padding: 11px 14px; border-radius: 11px;
+    font-size: 13px; font-weight: 600; background: #1e293b; border: 1px solid var(--accent); display: none; max-width: 650px; margin: 0 auto; }
+  footer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: flex; gap: 8px; padding: 12px 14px;
+    background: rgba(11,13,18,0.95); backdrop-filter: blur(8px); border-top: 1px solid var(--border); }
+  footer .btn { flex: 1; padding: 11px 10px; }
+  input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span>YGO Rogue MOD Loader</span>
+    <span class="pill" id="verPill">Android</span>
+  </div>
+  <button class="btn btn-sm" id="langBtn" onclick="toggleLang()">EN</button>
+</header>
+
+<main>
+  <div class="progress-box" id="progressBox">
+    <div id="progressText" style="font-size:12px;font-weight:600;">Working...</div>
+    <div class="bar-bg"><div class="bar-fill" id="progressFill"></div></div>
+  </div>
+
+  <!-- 1. Base Game Data (web-*.zip) -->
+  <section class="card">
+    <div class="card-title">
+      <span id="tBaseTitle">原版游戏数据包 (web-*.zip)</span>
+      <span class="pill" id="baseStatus">未安装</span>
+    </div>
+    <div class="muted" id="tBaseHint">无需安装官方 APK：可直接下载官方 web-*.zip 或从手机本地导入，MOD 会以零拷贝叠加层方式加载。</div>
+    <div class="row">
+      <select id="proxySel">
+        <option value="">GitHub 直连 / Direct</option>
+        <option value="https://ghfast.top/">ghfast.top 代理加速</option>
+        <option value="https://gh-proxy.com/">gh-proxy.com 代理加速</option>
+      </select>
+    </div>
+    <div class="row">
+      <button class="btn btn-primary" style="flex:1" onclick="downloadBase()" id="tDownloadBase">下载最新 web-*.zip</button>
+      <button class="btn" style="flex:1" onclick="AndroidModLoader.pickImportWebZip()" id="tImportBase">导入本地 web-.zip</button>
+    </div>
+  </section>
+
+  <!-- 2. Import-Only MOD Manager -->
+  <section class="card">
+    <div class="card-title">
+      <span id="tModsTitle">已导入 MOD 列表（下层优先）</span>
+      <button class="btn btn-primary btn-sm" onclick="AndroidModLoader.pickImportMod()" id="tImportMod">+ 导入 MOD / .ypk</button>
+    </div>
+    <div class="muted" id="tModsHint">支持直接导入：PC 工坊导出的 Android 覆盖包 (.zip)、标准 Mod Spec v1 (.zip)、工作区整合包 (.zip) 与 YGOPro/MDPro3 扩展包 (.ypk)。</div>
+    <div id="modList" style="display:flex;flex-direction:column;gap:8px;"></div>
+  </section>
+</main>
+
+<div class="toast" id="toastBox"></div>
+
+<footer>
+  <button class="btn btn-warn" onclick="AndroidModLoader.restoreVanilla()" id="tRestore">还原原版</button>
+  <button class="btn btn-primary" onclick="AndroidModLoader.applyMods(false)" id="tApply">应用 MOD</button>
+  <button class="btn btn-ok" onclick="AndroidModLoader.applyMods(true)" id="tPlay">▶ 应用并开玩</button>
+</footer>
+
+<script>
+let state = { lang: 'zh', mods: [], hasVanilla: false, vanillaVersion: '' };
+
+const I18N = {
+  zh: {
+    baseTitle: '原版游戏数据包 (web-*.zip)',
+    baseHint: '无需覆盖官方 APK：直接下载官方 web-*.zip 或导入本地包，所有 MOD 通过零拷贝叠加层运行（与官方版独立共存）。',
+    dlBase: '下载最新 web-*.zip', importBase: '导入本地 web-.zip',
+    modsTitle: '已导入 MOD 列表（按顺序加载）', importMod: '+ 导入 .yrdpk / .zip / .ypk',
+    modsHint: '仅需导入即可游玩：支持 .yrdpk 专属 MOD 包、PC 工坊导出的 Android 覆盖包 (.zip)、Mod Spec v1 (.zip)、工作区整合包及 .ypk 扩展卡包。',
+    restore: '还原原版', apply: '应用 MOD', play: '▶ 应用并开玩',
+    empty: '还没有导入任何 MOD，点击右上角「+ 导入 MOD / .ypk」添加。',
+    notInstalled: '未下载', ready: '已就绪'
+  },
+  en: {
+    baseTitle: 'Base Game Data (web-*.zip)',
+    baseHint: 'Installs side-by-side with the official APK. Download or import web-*.zip; enabled MODs run via zero-copy overlay.',
+    dlBase: 'Download Latest web-.zip', importBase: 'Import Local web-.zip',
+    modsTitle: 'Imported MODs (Load Order)', importMod: '+ Import .yrdpk / .zip / .ypk',
+    modsHint: 'Import-only loader: supports .yrdpk MOD packages, Desktop Studio Android Overlays (.zip), Mod Spec v1 (.zip), Workspace Packs & .ypk.',
+    restore: 'Restore Vanilla', apply: 'Apply MODs', play: '▶ Apply & Play',
+    empty: 'No MODs imported yet. Tap "+ Import MOD / .ypk" above.',
+    notInstalled: 'Missing', ready: 'Ready'
+  }
+};
+
+function render() {
+  const d = I18N[state.lang === 'en' ? 'en' : 'zh'];
+  document.getElementById('langBtn').textContent = state.lang === 'en' ? '中文' : 'EN';
+  document.getElementById('tBaseTitle').textContent = d.baseTitle;
+  document.getElementById('tBaseHint').textContent = d.baseHint;
+  document.getElementById('tDownloadBase').textContent = d.dlBase;
+  document.getElementById('tImportBase').textContent = d.importBase;
+  document.getElementById('tModsTitle').textContent = d.modsTitle;
+  document.getElementById('tImportMod').textContent = d.importMod;
+  document.getElementById('tModsHint').textContent = d.modsHint;
+  document.getElementById('tRestore').textContent = d.restore;
+  document.getElementById('tApply').textContent = d.apply;
+  document.getElementById('tPlay').textContent = d.play;
+
+  const baseStatus = document.getElementById('baseStatus');
+  baseStatus.textContent = state.hasVanilla
+    ? `${d.ready} v${state.vanillaVersion || '?'} (${state.vanillaSizeMb || 0} MB)`
+    : d.notInstalled;
+  baseStatus.style.color = state.hasVanilla ? 'var(--ok)' : 'var(--warn)';
+  document.getElementById('verPill').textContent = state.applied
+    ? `MOD (${state.appliedCount || 0})`
+    : (state.hasVanilla ? `v${state.vanillaVersion}` : 'Android');
+
+  if (state.githubProxy !== undefined) {
+    document.getElementById('proxySel').value = state.githubProxy || '';
+  }
+
+  const listEl = document.getElementById('modList');
+  const mods = state.mods || [];
+  if (!mods.length) {
+    listEl.innerHTML = `<div class="muted" style="text-align:center;padding:18px 8px;">${d.empty}</div>`;
+    return;
+  }
+  listEl.innerHTML = mods.map((m, i) => `
+    <div class="mod-item">
+      <input type="checkbox" ${m.enabled ? 'checked' : ''} onchange="AndroidModLoader.toggleMod('${esc(m.id)}', this.checked)" />
+      <div class="mod-info">
+        <div class="mod-name">${esc(m.name || m.id)}</div>
+        <div class="mod-meta"><span class="tag">${esc(m.kind || 'mod')}</span>${esc(m.summary || m.id)}</div>
+      </div>
+      <div style="display:flex;gap:4px;">
+        <button class="btn btn-sm" ${i === 0 ? 'disabled' : ''} onclick="AndroidModLoader.moveMod('${esc(m.id)}', -1)">▲</button>
+        <button class="btn btn-sm" ${i === mods.length - 1 ? 'disabled' : ''} onclick="AndroidModLoader.moveMod('${esc(m.id)}', 1)">▼</button>
+        <button class="btn btn-err btn-sm" onclick="AndroidModLoader.deleteMod('${esc(m.id)}')">✕</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function esc(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function toggleLang() {
+  const next = state.lang === 'en' ? 'zh' : 'en';
+  state.lang = next;
+  render();
+  if (window.AndroidModLoader) AndroidModLoader.setSetting('lang', next);
+}
+
+function downloadBase() {
+  const proxy = document.getElementById('proxySel').value;
+  AndroidModLoader.downloadWebZip(proxy);
+}
+
+let toastTimer = null;
+window.__loaderEvents = {
+  onRefresh(st) { state = st; render(); },
+  onProgress(p) {
+    const box = document.getElementById('progressBox');
+    box.style.display = 'block';
+    document.getElementById('progressText').textContent = `${p.message} (${p.percent}%)`;
+    document.getElementById('progressFill').style.width = `${p.percent}%`;
+    if (p.percent >= 100) setTimeout(() => { box.style.display = 'none'; }, 1200);
+  },
+  onToast(t) {
+    const box = document.getElementById('toastBox');
+    box.textContent = t.message;
+    box.style.borderColor = t.level === 'err' ? 'var(--err)' : (t.level === 'ok' ? 'var(--ok)' : 'var(--accent)');
+    box.style.display = 'block';
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { box.style.display = 'none'; }, 3500);
+  }
+};
+
+try {
+  if (window.AndroidModLoader) {
+    state = JSON.parse(AndroidModLoader.getStatus());
+  }
+} catch (e) {}
+render();
+</script>
+</body>
+</html>

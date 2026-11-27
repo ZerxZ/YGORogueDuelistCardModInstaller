@@ -55,7 +55,12 @@ import type { McpCallRecord, StudioSyncEvent } from './types';
 
 export function subscribeEvents(handlers: {
   onLog?: (e: { time: string; level: string; message: string }) => void;
-  onProgress?: (e: { status: string; percent: number | null }) => void;
+  onProgress?: (e: {
+    status: string;
+    percent: number | null;
+    isDownloading?: boolean;
+    label?: string | null;
+  }) => void;
   onHotReload?: (e: {
     running: boolean;
     port: number;

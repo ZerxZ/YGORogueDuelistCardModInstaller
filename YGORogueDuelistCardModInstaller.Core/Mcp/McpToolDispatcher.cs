@@ -88,8 +88,8 @@ public static class McpToolDispatcher
                 ("startIfStopped", Bool("Start Hot-Reload server if not already running (default true)")))),
 
         // === Guides, Status & Vanilla Data Search ===
-        Tool("get_mod_guide", "Get official Mod Spec v1 guides & schemas for creating cards, characters, relics, packs, decks, trainers, in-game MOD settings, Xmake-style Lua/JS DSL, Lua scripts, or JS plugins.",
-            Obj(("topic", Str("Topic: overview | dsl | settings | card | character | relic | pack | deck | trainer | lua | js | bitmasks")))),
+        Tool("get_mod_guide", "Get official Mod Spec v1 guides & schemas for creating cards, characters, relics, packs, decks, trainers, campaign/removals, relic system deep-dive, in-game MOD settings, Xmake-style Lua/JS DSL, Lua scripts, JS plugins, Post-Synchro modern era (Synchro/Xyz/Pendulum/Link), or Linux/Android/Delta packaging.",
+            Obj(("topic", Str("Topic: overview | dsl | settings | card | character | relic | relic_deep | campaign | removals | pack | deck | trainer | lua | js | bitmasks | modern_era | platforms")))),
 
         Tool("get_manager_status", "Inspect the MOD manager status: detected game version, sync state, all managed mods (with category, cover, auto-imported entries & settings count), load order, and conflicts.",
             Obj(("root", Str("Optional workspace root path")))),

@@ -55,6 +55,8 @@ uninstall-mod.ps1
 
 ## Local Game Copies, Installers & Backups
 .external/
+android-loader/build/
+android-loader/dist/
 Yu-Gi-Oh! Rogue Duelist/
 web-*.zip
 YGO-Rogue-Windows-Setup*.exe
@@ -68,6 +70,12 @@ YGORogueDuelistCardModInstaller.Desktop/wwwroot/
 ## MOD Manager Local Runtime State & User Mods
 manager-state.json
 mods/
+exports/
+downloads/
+*.yrdpk
+*.ypk
+*.apk
+*.delta.gz
 
 ## OS Generated Files
 Thumbs.db

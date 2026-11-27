@@ -8,11 +8,24 @@ public static partial class GameLocator
 {
     public const string GameDllName = "Yu-Gi-Oh! Rogue Duelist.dll";
     public const string GameExeName = "Yu-Gi-Oh! Rogue Duelist.exe";
+    public const string LinuxBinName = "ygo-rogue-duelist";
     public const string GameFolderName = "Yu-Gi-Oh! Rogue Duelist";
     public const string LegacyFolderName = "Shadow Run";
 
-    private static string LocalAppData =>
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+    private static string LocalAppData
+    {
+        get
+        {
+            if (OperatingSystem.IsLinux())
+            {
+                var xdg = Environment.GetEnvironmentVariable("XDG_DATA_HOME");
+                if (!string.IsNullOrWhiteSpace(xdg)) return xdg;
+                var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                if (!string.IsNullOrWhiteSpace(home)) return Path.Combine(home, ".local", "share");
+            }
+            return Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        }
+    }
 
     [GeneratedRegex(@"^[0-9]+(\.[0-9]+)*$", RegexOptions.CultureInvariant)]
     private static partial Regex VersionFolderRegex();
@@ -89,7 +102,8 @@ public static partial class GameLocator
         try
         {
             return File.Exists(Path.Combine(dir, GameExeName)) ||
-                   File.Exists(Path.Combine(dir, GameDllName));
+                   File.Exists(Path.Combine(dir, GameDllName)) ||
+                   File.Exists(Path.Combine(dir, LinuxBinName));
         }
         catch
         {

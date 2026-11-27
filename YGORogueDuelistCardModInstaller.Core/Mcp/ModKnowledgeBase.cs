@@ -14,8 +14,129 @@ public static class ModKnowledgeBase
         "dsl" or "xmake" => DslGuide,
         "pack" or "packs" or "deck" or "decks" => PackDeckGuide,
         "bitmasks" or "constants" => BitmaskGuide,
+        "modern" or "modern_era" or "synchro" or "xyz" or "pendulum" or "link" or "runtime_script" => ModernEraGuide,
+        "platforms" or "linux" or "android" or "delta" or "packaging" => CrossPlatformGuide,
+        "relic_deep" or "relic_system" or "fusions" => RelicDeepDiveGuide,
+        "campaign" or "removals" or "curse" or "curses" or "seal" => CampaignRemovalsGuide,
         _ => OverviewGuide
     };
+
+    public const string CampaignRemovalsGuide = """
+        # Campaign Rules, Vanilla Removals & System Toggles (`campaign-config.json` / `removals.json`)
+
+        Drop a `campaign-config.json` (or `removals.json`) at the root of your MOD folder — or edit it visually inside **Visual MOD Studio -> Campaign & Removals (`campaign`)** — to cleanly remove vanilla content or disable whole subsystems without hand-editing upstream Python!
+
+        ```json
+        {
+          "duelRules": "mr5",
+          "startingGold": 150,
+          "startingLp": 8000,
+          "bossEvery": 4,
+          "shopPackCount": 4,
+          "rerollBasePrice": 15,
+          "banishPrice": 20,
+          "disableBossCurses": false,
+          "disableShadowRelics": false,
+          "disableRelicSeal": true,
+          "disableRelicBanish": false,
+          "disableRelicFusions": false,
+          "removals": {
+            "removeCardIds": [55144522, 79571449],
+            "removeCharacterNames": ["Weevil Underwood"],
+            "removeCharacterIndices": [],
+            "removePackIds": ["EN-LOB"],
+            "removeDeckIds": ["SDK"],
+            "removeRelicKeys": ["cursed_greed", "feather"],
+            "removeCurseKeys": ["relic_seal", "tiny_hand"]
+          }
+        }
+        ```
+
+        ## What Each Toggle Patches Automatically
+        - `removeCardIds`: Strips cards from `content.json -> cards`, booster packs (`content.json` & `data/packs.json`), preconstructed decks, and character signature decks.
+        - `removeCharacterNames` / `removeCharacterIndices`: Hides characters from `playable`, `progression.json`, and `character-selection` without breaking numeric index alignment!
+        - `removePackIds` / `removeDeckIds`: Removes packs/decks from `content.json`, `data/packs.json`, `data/preconstructed-decks.json`, and character starting packs.
+        - `removeRelicKeys`: Removes relics from `content.json -> artifacts`, `approved_relics.py -> REMOVED`, `artifact_expansion.py`, `cursed-relics.json`, and `relic_fusions.py`.
+        - `disableRelicSeal`: Removes `'relic_seal'` from `CURSES` and strips `relic_seal` / `sealed_relics` inside `approved_relics.duel_run(run)`.
+        - `disableBossCurses`: Patches `feedback_update.draw_curses` and route curse generators to return `[]`.
+        - `disableShadowRelics`: Patches `cursed_relics.create_offer` / `require_choice` so post-boss shadow relic offers never trigger.
+        - `disableRelicBanish`: Disables shop relic banish (`banish_relic`) and sets `BANISH_PRICE = 0`.
+        - `disableRelicFusions`: Clears fusion recipe tables (`FUSED`, `NEEDED`, `REQUIRED`) in `relic_fusions.py`.
+        """;
+
+    public const string RelicDeepDiveGuide = """
+        # Vanilla Relic System Deep Dive (Verified from `ygo-rogue-duelist v0.2.47`)
+
+        The vanilla relic engine spans **12 Python campaign modules** (~324+ relics across 6 tiers) compiled dynamically into `shadow-passives.lua` before every duel:
+
+        1. `content.py`: Core 51 relics (`ARTIFACTS`, `ART_INFO`, `RETIRED_ARTIFACTS = {'feather'}`), plus 23 boss `CURSES` (including `relic_seal`).
+        2. `artifact_expansion.py` + `artifact_effects.py`: Expanded shop relics (`broken_limiter`, `deck_spyglass`, `magic_mirror`, `golden_sleeve`, `crystal_prism`, etc.).
+        3. `approved_relics.py` + `approved_relic_effects.py`: 48+ approved regular relics (`REGULAR`), 48 Shadow/Cursed relics (`CURSED`, `cursed_*` prefix, excluded from normal shop), `REMOVED` frozenset, and **`duel_run(run)`** which executes **`relic_seal`** (sealing half the player's active relics during a duel!).
+        4. `archetype_relics.py` + `relic_affinity.py`: Deck-based shop weighting (`offer_weights()`, `shop_sample()`, `WEIGHTED_SHOP_SLOTS = 2`).
+        5. `relic_fusions.py`: **46 secret fusion recipes (`FUSED`)** including multi-tier fusion (`genetic_override = attribute_mutation + unstable_dna`), `INCLUDES` inheritance (`jar_of_greed`, `grand_bazaar`), and custom tokens (`MOTH_TOKEN = 190000057`, `DANDELION_TOKEN = 190000058`).
+        6. `variant_relics.py`: Alternate character variant starting relics.
+        7. `choice_relics.py`: Interactive choice relics (`relic_picker`, `card_picker`, `name_changer`, `weighted_coins`, `weighted_dice` -> `Duel.SetRogueWeight`), plus `VERY_RARE = ('almighty', 'the_creator', 'dimensional_rift')`.
+        8. `cursed_relics.py`: Mandatory post-boss Shadow Relic offer (`create_offer`, `reroll`, `choose`, `skip`, `require_choice`).
+        9. `draft_relics.py`: Online Draft duel relics.
+        10. `passives.py`: Compiles active relics + curses into `shadow-passives.lua`:
+            - Injects `-- SHADOW_RUN_RNG 2`, `Duel.EnableRogueAntiStreak()`, and `-- SHADOW_RUN_AI <json>` (read by `duel.js` & `smart_policy.js`).
+            - Hint protocol (`Duel.Hint(HINT_MESSAGE, 0, code)`): `1800000000+idx` (relic art banner), `1850000000+idx` (`--[[relic-ask]]` confirmation prompt), `1860000000+idx` (prompt label), `1100000000..1700000000` (damage/chain/destroy/remove/tribute telemetry), `900000001` (phoenix revive).
+
+        See `docs/RELIC-SYSTEM-DEEP-DIVE.md` or `.agents/skills/ygo-rogue-modding/references/relic-system.md` for full recipes & code walkthroughs.
+        """;
+
+    public const string ModernEraGuide = """
+        # Post-Synchro / Modern Era Modding (`runtime/script` + Synchro / Xyz / Pendulum / Link)
+
+        ## 1. Engine Capabilities (Verified in `ygo-rogue-duelist` source!)
+        - The game runs **EDOPro `ocgcore-wasm 0.1.2`** and ALREADY bundles ALL 27 core EDOPro helper scripts inside `scripts.json`:
+          - `constant.lua`, `utility.lua` (87 KB), `archetype_setcode_constants.lua`, `card_counter_constants.lua`, `cards_specific_functions.lua`, `rogue-rng.lua`
+          - **`proc_synchro.lua`** (`Synchro.AddProcedure`), **`proc_xyz.lua`** (`Xyz.AddProcedure`), **`proc_pendulum.lua`** (`Pendulum.AddProcedure`), **`proc_link.lua`** (`Link.AddProcedure`), `proc_fusion.lua`, `proc_ritual.lua`, `proc_maximum.lua`, `proc_rush.lua`, `proc_skill.lua`.
+        - `OcgDuelMode` inside `vendor/package/dist/index.js` ALREADY supports:
+          - `MODE_MR1` (default DM/GX), `MODE_MR2` (5D's/ZEXAL: Synchro & Xyz), `MODE_MR3` (Pendulum Zones), `MODE_MR4` (EMZ + Link), **`MODE_MR5`** (MR2020: `PZONE | EMZONE | FSX_MMZONE | TRAP_MONSTERS_NOT_USE_ZONE | TRIGGER_ONLY_IN_LOCATION`).
+
+        ## 2. How Our MOD Manager Automatically Unlocks Modern Eras!
+        Set `"duelRules": "mr2" | "mr3" | "mr4" | "mr5"` in `mod-manifest.json` (OR simply add any card with Synchro `0x2000`, Xyz `0x800000`, Pendulum `0x1000000`, or Link `0x4000000` type mask — **auto-detected!**):
+        - Automatically upgrades `campaign.py` (`is_extra_deck`), `mobile.js`, `draft-ui.js`, `tag-ui.js`, `run-card.js` from Fusion-only (`& 64`) to full Extra Deck (`& (64 | 0x2000 | 0x800000 | 0x4000000)`).
+        - Automatically patches `engine.js` to start duels with the required `OcgDuelMode.MODE_MR2/MR3/MR4/MR5`, expands `SELECT_PLACE` MZONE to include EMZ slots (`0..6`), queries `OVERLAY_CARD` / `LSCALE` / `RSCALE` / `LINK`, and preserves EMZ in `snapshot()`.
+        - Automatically upgrades `utility.lua`'s `GetID()` to 3-return `(s, id, o)` for modern EDOPro scripts.
+
+        ## 3. Card Bitmasks & `data` Fields for Modern Mechanics
+        | Card Kind | `data.type` Bitmask | Extra `data` Fields | Procedure Call |
+        |---|---|---|---|
+        | Tuner Effect Monster | `0x1021` (`4129`) | standard `level/attack/defense` | normal effect |
+        | Synchro Effect Monster | `0x2021` (`8225`) | `level` = Synchro Level | `Synchro.AddProcedure(c,nil,1,1,Synchro.NonTuner(nil),1,99)` + `c:EnableReviveLimit()` |
+        | Xyz Effect Monster | `0x800021` (`8388641`) | `level` = Rank (1–13) | `Xyz.AddProcedure(c,nil,4,2)` + `c:EnableReviveLimit()` |
+        | Pendulum Effect Monster | `0x1000021` (`16777249`) | `lscale`, `rscale` (0–13) | `Pendulum.AddProcedure(c)` |
+        | Link Effect Monster | `0x4000021` (`67108897`) | `level` = Link Rating, `defense` = `0`, `link_marker` bitmask | `Link.AddProcedure(c,filter,min,max)` + `c:EnableReviveLimit()` |
+
+        ### Link Marker Bitmasks (`data.link_marker`)
+        - `0x001` Bottom-Left, `0x002` Bottom, `0x004` Bottom-Right
+        - `0x008` Left, `0x020` Right
+        - `0x040` Top-Left, `0x080` Top, `0x100` Top-Right
+
+        ## 4. `ocgcore-wasm 0.1.2` Important Caveats
+        - `engine.js` stubs `Chain.GetTriggeringScale` / `Chain.GetTriggeringLink` only if NO cards have `0x1000000` / `0x4000000`, so adding Pendulum/Link cards disables the stub — avoid calling `CHAININFO_TRIGGERING_LINK (31)` or `CHAININFO_TRIGGERING_LSCALE (32)` in scripts (not in wasm 0.1.2).
+        - Official `rogue-rng.lua` hooks `Duel.GetRandomNumber` / `TossCoin` / `TossDice` for anti-streak & weighted relics (`Duel.SetRogueWeight`).
+        - Prefer `Cost.DetachFromSelf(1)` or `e:GetHandler():RemoveOverlayCard(tp,1,1,REASON_COST)` for Xyz costs.
+        - Remember to also provide UI styling via `styles/*.css` / `js/*.js` if you want custom EMZ / Pendulum Zone visual slots beyond the core duel prompt choices.
+        """;
+
+    public const string CrossPlatformGuide = """
+        # Cross-Platform Support (Windows / Linux / Android) & `.delta.gz` Patches
+
+        ## 1. Official `.delta.gz` Patch Format (`YGODLT01`)
+        - `web-<old>-to-<new>.delta.gz` (~5.5 MB vs 228 MB full zip): Used by Windows & Linux launchers AND our MOD Manager to reconstruct byte-for-byte identical `web-<new>.zip` via `DeltaPatchService.cs`!
+        - `ygo-update-<baseApkSha256>.delta.gz`: Used by Android APK updater (`UpdateDelta.java`) to reconstruct the exact signed APK without re-signing.
+
+        ## 2. Linux / Steam Deck Support
+        - The official Linux launcher (`YGO-Rogue-Linux-x86_64.tar.gz`) uses the **exact same `Game/<version>` bundle format** under `~/.local/share/Yu-Gi-Oh! Rogue Duelist/Game/` (`$XDG_DATA_HOME`).
+        - Use **Export Linux MOD Bundle** (`POST /api/export/linux-bundle`) to generate a portable `.zip` with `900.x.y.zip` + `.sha256` + `install-linux-mod.sh`.
+
+        ## 3. Android Support (Two Modes)
+        1. **LAN Hot-Reload PWA (Zero APK Re-sign!)**: Start Hot-Reload in Desktop Studio -> open the shown LAN URL (`http://<PC-IP>:17845/`) on Android Chrome/Edge -> Add to Home Screen!
+        2. **Offline Modded APK (`POST /api/export/android-bundle`)**: Supply official `YGO-Rogue-Android.apk` to patch `assets/web/*` directly into `YGO-Rogue-Android-Modded-unsigned.apk`, then sign with `uber-apk-signer` / `apksigner` / Android MT Manager!
+        """;
 
     public const string SettingsGuide = """
         # In-Game MOD Settings (`settingsSchema` / `settings.json` + `ctx.settings`)

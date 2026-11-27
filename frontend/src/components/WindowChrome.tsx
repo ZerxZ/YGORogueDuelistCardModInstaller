@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Button, Chip, Spinner } from '@heroui/react';
 import {
   Copy,
+  GraduationCap,
   Minus,
   PanelLeft,
   PanelRight,
@@ -47,6 +48,7 @@ interface TitleBarProps {
   onToggleSidebar: () => void;
   onToggleInspector: () => void;
   onToggleConsole: () => void;
+  onOpenOnboarding: () => void;
   onApply: () => void;
   onApplyLaunch: () => void;
   onRestore: () => void;
@@ -66,6 +68,7 @@ export function TitleBar({
   onToggleSidebar,
   onToggleInspector,
   onToggleConsole,
+  onOpenOnboarding,
   onApply,
   onApplyLaunch,
   onRestore,
@@ -183,6 +186,17 @@ export function TitleBar({
         </div>
 
         <div className="mx-0.5 h-4 w-px bg-border" />
+
+        {/* Beginner Onboarding Tutorial Button */}
+        <button
+          type="button"
+          onClick={onOpenOnboarding}
+          title={t.onboardingBtn}
+          className="flex h-7 items-center gap-1 rounded-md px-2 text-[11px] font-medium text-accent transition-colors hover:bg-accent/15"
+        >
+          <GraduationCap className="size-3.5" />
+          <span className="hidden xl:inline">{t.onboardingBtn}</span>
+        </button>
 
         {/* IDE Pane Toggles (like T3 Code top-right!) */}
         <button
